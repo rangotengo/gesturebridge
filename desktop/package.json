@@ -1,0 +1,29 @@
+{
+  "name": "desktop",
+  "version": "1.0.0",
+  "description": "Electron shell for GestureBridge real-time hand gesture recognition",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsc && (wait-on http://localhost:3000 && electron dist/main.js)",
+    "build:ts": "tsc",
+    "test": "npm run build:ts && node --test tests/*.test.cjs",
+    "build": "npm run build:ts && electron-builder",
+    "rebuild": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "robotjs": "^0.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.8.1",
+    "node-abi": "^4.33.0",
+    "typescript": "^5.7.3",
+    "wait-on": "^9.0.4"
+  }
+}

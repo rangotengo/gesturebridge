@@ -1,0 +1,13 @@
+.codex/
+node_modules/
+graphify-out/
+.DS_Store
+desktop/dist/
+desktop/release/
+desktop/*.log
+.env
+.env.*
+!.env.example
+dist
+.github
+.nvmrc

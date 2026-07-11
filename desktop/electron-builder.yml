@@ -1,0 +1,33 @@
+appId: com.gesturebridge.desktop
+productName: GestureBridge
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+asar: true
+npmRebuild: true
+buildDependenciesFromSource: true
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+  - node_modules/**/*
+asarUnpack:
+  - node_modules/robotjs/**/*
+mac:
+  category: public.app-category.utilities
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  target:
+    - dmg
+    - zip
+win:
+  artifactName: ${productName}-${version}-setup-${arch}.${ext}
+  target:
+    - nsis
+nsis:
+  perMachine: false
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  category: Utility
+  target:
+    - AppImage

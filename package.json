@@ -1,0 +1,28 @@
+{
+  "name": "gesturebridge",
+  "version": "1.0.0",
+  "description": "Real-time hand gesture recognition app",
+  "engines": {
+    "node": ">=22 <25",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "dev:web": "cd web && npm run dev",
+    "dev:desktop": "cd desktop && npm run dev",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:desktop\"",
+    "install:all": "npm install && npm --prefix web install && npm --prefix desktop install",
+    "build:web": "npm --prefix web run build",
+    "build:desktop": "npm --prefix desktop run build",
+    "type-check": "npm --prefix web run type-check && npm --prefix desktop run build:ts",
+    "lint": "npm --prefix web run lint",
+    "test": "npm --prefix web run test",
+    "check": "npm run type-check && npm run lint && npm run test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "private": true,
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
