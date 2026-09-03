@@ -8,6 +8,12 @@ desktop/*.log
 .env
 .env.*
 !.env.example
-dist
-.github
-.nvmrc
+dist/
+web/.next/
+web/dist-server/
+web/public/vendor/mediapipe/
+web/coverage/
+web/.vercel/
+web/out/
+*.tsbuildinfo
+CLAUDE.md

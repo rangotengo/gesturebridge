@@ -262,9 +262,9 @@ cd desktop && npm install some-package@latest
 
 | ✅ Do | ❌ Don't |
 |---|---|
-| Use vanilla CSS (global or CSS modules) | Add Tailwind or any CSS-in-JS library |
-| Follow existing color variables in `index.css` | Hardcode hex/rgb colors inline |
-| Use CSS custom properties for theming | Use magic numbers for spacing/sizing |
+| Use Tailwind CSS utility classes | Add styled-components, CSS modules, or inline style objects |
+| Extend the theme via `@theme` in `globals.css` | Hardcode arbitrary hex/rgb colors inline |
+| Use `@layer utilities` for custom keyframes/animations | Write unorganized vanilla CSS stylesheets |
 
 ### API Routes
 

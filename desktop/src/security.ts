@@ -138,3 +138,47 @@ export class IpcRateLimiter {
     for (const key of oldestKeys) this.entries.delete(key);
   }
 }
+
+export function isValidAuthToken(payload: unknown, expectedToken: string): boolean {
+  if (!expectedToken || typeof expectedToken !== 'string') return false;
+  if (!isRecord(payload) || typeof payload.token !== 'string') return false;
+  if (payload.token.length !== expectedToken.length) return false;
+  let match = 0;
+  for (let i = 0; i < expectedToken.length; i += 1) {
+    match |= payload.token.charCodeAt(i) ^ expectedToken.charCodeAt(i);
+  }
+  return match === 0;
+}
+
+export const DEADMAN_TIMEOUT_MS = 1_000;
+
+export class DeadmanTimer {
+  private timer: NodeJS.Timeout | null = null;
+
+  public constructor(
+    private readonly timeoutMs: number,
+    private readonly onTimeout: () => void
+  ) {}
+
+  public heartbeat(): void {
+    this.cancel();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.onTimeout();
+    }, this.timeoutMs);
+    if (typeof this.timer?.unref === 'function') {
+      this.timer.unref();
+    }
+  }
+
+  public cancel(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
+  public isActive(): boolean {
+    return this.timer !== null;
+  }
+}

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Real-time hand gesture recognition app",
   "engines": {
-    "node": ">=22 <25",
+    "node": ">=22 <=26",
     "npm": ">=10"
   },
   "scripts": {
@@ -15,8 +15,8 @@
     "build:desktop": "npm --prefix desktop run build",
     "type-check": "npm --prefix web run type-check && npm --prefix desktop run build:ts",
     "lint": "npm --prefix web run lint",
-    "test": "npm --prefix web run test",
-    "check": "npm run type-check && npm run lint && npm run test"
+    "test": "npm --prefix web run test && npm --prefix desktop run test",
+    "check": "npm run type-check && npm run lint && npm run test && npm run build:web"
   },
   "keywords": [],
   "author": "",
@@ -24,5 +24,8 @@
   "private": true,
   "devDependencies": {
     "concurrently": "^9.2.1"
+  },
+  "overrides": {
+    "shell-quote": ">=1.8.5"
   }
 }

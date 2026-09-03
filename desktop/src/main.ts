@@ -1,14 +1,18 @@
 import {
   app,
   BrowserWindow,
+  globalShortcut,
   ipcMain,
   screen,
   session,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
+import * as crypto from 'crypto';
 import * as path from 'path';
 import {
+  DEADMAN_TIMEOUT_MS,
+  DeadmanTimer,
   IpcRateLimiter,
   isAllowedLocalUrl,
   isAllowedNavigation,
@@ -17,6 +21,7 @@ import {
   isMouseToggleButton,
   isScrollDirection,
   isTrustedSenderUrl,
+  isValidAuthToken,
   isZoomDirection,
   parsePointPayload,
   type MouseToggleButton,
@@ -35,6 +40,7 @@ let mainWindow: BrowserWindow | null = null;
 let normalBounds: Electron.Rectangle | null = null;
 let robotModule: RobotModule | null | undefined;
 let trustedOrigin = '';
+const sessionAuthToken = crypto.randomBytes(32).toString('hex');
 const heldMouseButtons = new Set<MouseToggleButton>();
 
 const ipcRateLimiter = new IpcRateLimiter();
@@ -87,13 +93,20 @@ function getWebUrl(): string {
   return fallbackUrl;
 }
 
-function isTrustedIpcSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
+function isTrustedIpcSender(
+  event: IpcMainEvent | IpcMainInvokeEvent,
+  payload: unknown
+): boolean {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame?.parent) {
     return false;
   }
 
   const senderUrl = event.senderFrame?.url ?? event.sender.getURL();
-  return isTrustedSenderUrl(senderUrl, trustedOrigin);
+  if (!isTrustedSenderUrl(senderUrl, trustedOrigin)) {
+    return false;
+  }
+
+  return isValidAuthToken(payload, sessionAuthToken);
 }
 
 function consumeIpcRateLimit(
@@ -138,7 +151,7 @@ function configurePermissionGuards(allowedOrigin: string): void {
 
 function releaseHeldMouseButtons(): void {
   const robot = getRobot();
-  if (!robot) return;
+  if (!robot || heldMouseButtons.size === 0) return;
 
   for (const button of heldMouseButtons) {
     try {
@@ -148,6 +161,42 @@ function releaseHeldMouseButtons(): void {
     }
   }
   heldMouseButtons.clear();
+}
+
+const deadmanTimer = new DeadmanTimer(DEADMAN_TIMEOUT_MS, () => {
+  logDiagnostic('deadman-timeout-fired-releasing-buttons');
+  releaseHeldMouseButtons();
+});
+
+function restoreNormalBounds(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setResizable(true);
+    if (normalBounds) {
+      mainWindow.setBounds(normalBounds);
+      normalBounds = null;
+    } else {
+      mainWindow.setSize(1280, 800);
+      mainWindow.center();
+    }
+  } catch (err) {
+    console.error('Error restoring normal bounds:', err);
+  }
+}
+
+function emergencyStop(): void {
+  deadmanTimer.cancel();
+  releaseHeldMouseButtons();
+  restoreNormalBounds();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('control:emergency-stop');
+    } catch (err) {
+      console.error('Error sending emergency-stop IPC to renderer:', err);
+    }
+  }
+  logDiagnostic('emergency-stop-executed');
 }
 
 function createWindow(webUrl: string, allowedOrigin: string): void {
@@ -164,24 +213,35 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
       webSecurity: true,
       allowRunningInsecureContent: false,
       webviewTag: false,
+      additionalArguments: [`--app-token=${sessionAuthToken}`],
     },
   });
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl) => {
+    emergencyStop();
     console.error('Failed to load GestureBridge web app.', {
       errorCode,
       errorDescription,
       url: validatedUrl,
     });
   });
+
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    emergencyStop();
     console.error('GestureBridge renderer process exited.', details);
   });
+
   mainWindow.webContents.on('unresponsive', () => {
+    emergencyStop();
     console.error('GestureBridge renderer became unresponsive.');
   });
+
   mainWindow.webContents.on('responsive', () => {
     logDiagnostic('renderer-responsive');
+  });
+
+  mainWindow.webContents.on('did-start-navigation', () => {
+    emergencyStop();
   });
 
   void mainWindow.loadURL(webUrl).catch((error: unknown) => {
@@ -206,54 +266,100 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
     event.preventDefault();
   });
 
+  mainWindow.on('blur', () => {
+    releaseHeldMouseButtons();
+  });
+
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
   if (isDev) {
     mainWindow.webContents.openDevTools();
   }
 
   mainWindow.on('closed', () => {
+    deadmanTimer.cancel();
     releaseHeldMouseButtons();
     ipcRateLimiter.clear();
     mainWindow = null;
   });
 }
 
-void app.whenReady().then(() => {
-  const webUrl = getWebUrl();
-  const allowedOrigin = new URL(webUrl).origin;
-  trustedOrigin = allowedOrigin;
-  logDiagnostic('starting', {
-    packaged: app.isPackaged,
-    platform: process.platform,
-    webOrigin: allowedOrigin,
-    userDataPath: app.getPath('userData'),
+// Single Instance Lock
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.warn('Another instance of GestureBridge is already running. Exiting.');
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
-  configurePermissionGuards(allowedOrigin);
-  createWindow(webUrl, allowedOrigin);
-});
 
-app.on('window-all-closed', () => {
-  releaseHeldMouseButtons();
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (mainWindow === null) {
+  void app.whenReady().then(() => {
     const webUrl = getWebUrl();
-    trustedOrigin = new URL(webUrl).origin;
-    createWindow(webUrl, trustedOrigin);
-  }
-});
+    const allowedOrigin = new URL(webUrl).origin;
+    trustedOrigin = allowedOrigin;
+    logDiagnostic('starting', {
+      packaged: app.isPackaged,
+      platform: process.platform,
+      webOrigin: allowedOrigin,
+      userDataPath: app.getPath('userData'),
+    });
+
+    try {
+      const registered = globalShortcut.register('CommandOrControl+Escape', emergencyStop);
+      if (!registered) {
+        console.warn('Failed to register global shortcut CommandOrControl+Escape.');
+      }
+    } catch (err) {
+      console.warn('Failed to register global emergency stop shortcut:', err);
+    }
+
+    screen.on('display-metrics-changed', () => logDiagnostic('display-metrics-changed'));
+    screen.on('display-added', () => logDiagnostic('display-added'));
+    screen.on('display-removed', () => logDiagnostic('display-removed'));
+
+    configurePermissionGuards(allowedOrigin);
+    createWindow(webUrl, allowedOrigin);
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+
+  app.on('before-quit', () => {
+    deadmanTimer.cancel();
+    releaseHeldMouseButtons();
+    globalShortcut.unregisterAll();
+  });
+
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+    deadmanTimer.cancel();
+    releaseHeldMouseButtons();
+  });
+
+  app.on('activate', () => {
+    if (mainWindow === null) {
+      const webUrl = getWebUrl();
+      trustedOrigin = new URL(webUrl).origin;
+      createWindow(webUrl, trustedOrigin);
+    }
+  });
+}
 
 ipcMain.on('mouse:move', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'mouse:move', 240)) return;
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:move', 120)) return;
   const pointPayload = parsePointPayload(payload);
   if (!pointPayload) return;
 
   const robot = getRobot();
   if (!robot) return;
+
+  if (heldMouseButtons.size > 0) {
+    deadmanTimer.heartbeat();
+  }
 
   try {
     const point = clampPointToDisplay(pointPayload.x, pointPayload.y);
@@ -264,7 +370,7 @@ ipcMain.on('mouse:move', (event, payload: unknown) => {
 });
 
 ipcMain.on('mouse:click', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'mouse:click', 30)) return;
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:click', 30)) return;
   if (
     !isRecord(payload) ||
     (payload.button !== undefined && !isMouseButton(payload.button))
@@ -283,7 +389,7 @@ ipcMain.on('mouse:click', (event, payload: unknown) => {
 });
 
 ipcMain.on('mouse:scroll', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'mouse:scroll', 60)) return;
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:scroll', 60)) return;
   if (typeof payload !== 'object' || payload === null || !('direction' in payload) || !isScrollDirection(payload.direction)) return;
 
   const robot = getRobot();
@@ -297,7 +403,7 @@ ipcMain.on('mouse:scroll', (event, payload: unknown) => {
 });
 
 ipcMain.on('mouse:button', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'mouse:button', 60)) return;
+  if (!isTrustedIpcSender(event, payload)) return;
   if (
     typeof payload !== 'object' ||
     payload === null ||
@@ -309,41 +415,54 @@ ipcMain.on('mouse:button', (event, payload: unknown) => {
     return;
   }
 
+  // Allow button release ('up') to bypass rate limiting for safety
+  if (payload.action !== 'up' && !consumeIpcRateLimit(event, 'mouse:button', 60)) {
+    return;
+  }
+
   const robot = getRobot();
   if (!robot) return;
 
   try {
     robot.mouseToggle(payload.action, payload.button);
-    if (payload.action === 'down') heldMouseButtons.add(payload.button);
-    else heldMouseButtons.delete(payload.button);
+    if (payload.action === 'down') {
+      heldMouseButtons.add(payload.button);
+      deadmanTimer.heartbeat();
+    } else {
+      heldMouseButtons.delete(payload.button);
+      if (heldMouseButtons.size === 0) {
+        deadmanTimer.cancel();
+      }
+    }
   } catch (err) {
     console.error('Error toggling mouse button:', err);
   }
 });
 
 ipcMain.on('zoom', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'zoom', 30)) return;
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'zoom', 30)) return;
   if (typeof payload !== 'object' || payload === null || !('direction' in payload) || !isZoomDirection(payload.direction)) return;
 
   const robot = getRobot();
   if (!robot) return;
 
+  const zoomModifier = process.platform === 'darwin' ? 'command' : 'control';
   try {
-    robot.keyToggle('control', 'down');
+    robot.keyToggle(zoomModifier, 'down');
     robot.scrollMouse(0, payload.direction === 'in' ? -3 : 3);
   } catch (err) {
     console.error('Error zooming:', err);
   } finally {
     try {
-      robot.keyToggle('control', 'up');
+      robot.keyToggle(zoomModifier, 'up');
     } catch (err) {
       console.error('Error releasing zoom modifier:', err);
     }
   }
 });
 
-ipcMain.handle('screen:size', (event) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'screen:size', 30)) {
+ipcMain.handle('screen:size', (event, payload: unknown) => {
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'screen:size', 30)) {
     throw new Error('Unauthorized IPC sender');
   }
 
@@ -361,7 +480,7 @@ ipcMain.handle('screen:size', (event) => {
 });
 
 ipcMain.on('window:set-compact', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event) || !consumeIpcRateLimit(event, 'window:set-compact', 10)) return;
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'window:set-compact', 10)) return;
   if (
     !mainWindow ||
     typeof payload !== 'object' ||
@@ -389,15 +508,7 @@ ipcMain.on('window:set-compact', (event, payload: unknown) => {
       mainWindow.setBounds({ x, y, width, height });
       mainWindow.setResizable(false);
     } else {
-      mainWindow.setAlwaysOnTop(false);
-      mainWindow.setResizable(true);
-      if (normalBounds) {
-        mainWindow.setBounds(normalBounds);
-        normalBounds = null;
-      } else {
-        mainWindow.setSize(1280, 800);
-        mainWindow.center();
-      }
+      restoreNormalBounds();
     }
   } catch (err) {
     console.error('Error toggling compact mode:', err);

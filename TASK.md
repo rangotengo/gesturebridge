@@ -1,6 +1,6 @@
 # TASK.md — GestureBridge Migration Checklist
 
-> **Goal**: Migrate from Vite+Express (plain JS) → Next.js 15 + TypeScript (`web/`) + Electron TypeScript (`desktop/`).
+> **Goal**: Migrate to Next.js 16 + TypeScript (`web/`) + Electron TypeScript (`desktop/`).
 > Update this file as you progress. Use `[/]` for in-progress, `[x]` for done.
 
 ---

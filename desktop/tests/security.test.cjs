@@ -58,3 +58,45 @@ test('rate limiter clears expired entries before accepting a new renderer channe
   assert.equal(limiter.consume(3, 'third', 1, 1_001), true);
   assert.equal(limiter.consume(3, 'third', 1, 1_002), false);
 });
+
+test('isValidAuthToken requires valid token and matches expected token', () => {
+  const { isValidAuthToken } = require('../dist/security.js');
+  const validSecret = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
+  assert.equal(isValidAuthToken({ token: validSecret }, validSecret), true);
+  assert.equal(isValidAuthToken({ token: 'wrong-secret' }, validSecret), false);
+  assert.equal(isValidAuthToken(null, validSecret), false);
+  assert.equal(isValidAuthToken({}, validSecret), false);
+  assert.equal(isValidAuthToken({ token: 12345 }, validSecret), false);
+  assert.equal(isValidAuthToken({ token: validSecret }, ''), false);
+});
+
+test('DeadmanTimer invokes callback on timeout and cancels cleanly', (t, done) => {
+  const { DeadmanTimer } = require('../dist/security.js');
+  let fired = false;
+  const timer = new DeadmanTimer(50, () => {
+    fired = true;
+    assert.equal(fired, true);
+    done();
+  });
+
+  assert.equal(timer.isActive(), false);
+  timer.heartbeat();
+  assert.equal(timer.isActive(), true);
+});
+
+test('DeadmanTimer cancel prevents timeout invocation', (t, done) => {
+  const { DeadmanTimer } = require('../dist/security.js');
+  let fired = false;
+  const timer = new DeadmanTimer(40, () => {
+    fired = true;
+  });
+
+  timer.heartbeat();
+  timer.cancel();
+  assert.equal(timer.isActive(), false);
+
+  setTimeout(() => {
+    assert.equal(fired, false);
+    done();
+  }, 70);
+});

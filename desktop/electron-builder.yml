@@ -16,6 +16,11 @@ mac:
   category: public.app-category.utilities
   hardenedRuntime: true
   gatekeeperAssess: false
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.inherit.plist
+  extendInfo:
+    NSCameraUsageDescription: "GestureBridge requires camera access for hand gesture tracking."
+    NSMicrophoneUsageDescription: "GestureBridge uses the microphone for blow detection in Mirror Mode."
   target:
     - dmg
     - zip

@@ -1,0 +1,31 @@
+{
+  "version": "v1.0.0",
+  "modelVersion": "v1.0.0",
+  "trainedAt": "2026-09-02T23:45:00.000Z",
+  "datasetRevision": "sha256-seed-default-v1",
+  "sampleCount": 872,
+  "featureCount": 63,
+  "normalizationVersion": "wrist-maxabs-v1",
+  "labels": [
+    { "labelIndex": 0, "name": "Pointing" },
+    { "labelIndex": 1, "name": "Fist" },
+    { "labelIndex": 2, "name": "Peace" },
+    { "labelIndex": 3, "name": "Open Palm" },
+    { "labelIndex": 4, "name": "Rock" },
+    { "labelIndex": 5, "name": "Thumb" }
+  ],
+  "denseLabelMap": [
+    { "labelIndex": 0, "name": "Pointing" },
+    { "labelIndex": 1, "name": "Fist" },
+    { "labelIndex": 2, "name": "Peace" },
+    { "labelIndex": 3, "name": "Open Palm" },
+    { "labelIndex": 4, "name": "Rock" },
+    { "labelIndex": 5, "name": "Thumb" }
+  ],
+  "metrics": {
+    "trainingAccuracy": 0.98,
+    "validationAccuracy": 0.96
+  },
+  "modelJsonSha256": "04524e80489adf8e004073fc479566feade3bfee608f833b88bfe05d13aded58",
+  "weightsSha256": "ea51f934204c5c40b2f0004433eb07cc7ec0376cb35608a4efad82e08b0e2464"
+}
