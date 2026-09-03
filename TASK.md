@@ -45,41 +45,47 @@
 - [x] Move trained model output to `web/public/ml/model/` (served as static assets)
 
 ### 1.6 API Routes (`web/app/api/`)
-- [x] `app/api/auth/register/route.ts` — POST register (from `server/routes/auth.js`)
-- [x] `app/api/auth/login/route.ts` — POST login
-- [x] `app/api/logs/route.ts` — GET + POST logs (from `server/routes/logs.js`)
-- [x] `app/api/ml/status/route.ts` — GET status
-- [x] `app/api/ml/gestures/route.ts` — GET all gestures, POST create gesture
+- [x] `app/api/admin/signup/route.ts` — POST bootstrap admin signup
+- [x] `app/api/admin/login/route.ts` — POST admin login
+- [x] `app/api/admin/me/route.ts` — GET current admin session
+- [x] `app/api/admin/logout/route.ts` — POST admin logout
+- [x] `app/api/logs/route.ts` — GET + POST logs
+- [x] `app/api/health/route.ts` — GET process liveness probe
+- [x] `app/api/health/ready/route.ts` — GET database readiness probe
+- [x] `app/api/ml/status/route.ts` — GET status (with `jobId` support)
+- [x] `app/api/ml/gestures/route.ts` — GET all gestures (read-only), POST create gesture
 - [x] `app/api/ml/gestures/batch/route.ts` — POST batch create gestures
 - [x] `app/api/ml/collect/route.ts` — POST save samples
-- [x] `app/api/ml/train/route.ts` — POST trigger training
+- [x] `app/api/ml/train/route.ts` — POST trigger background training
 - [x] `app/api/ml/import/route.ts` — POST import dataset
 
 ### 1.7 Context & Hooks (`web/context/`, `web/hooks/`)
-- [x] `context/AuthContext.tsx` — convert from `AuthContext.jsx`, add types
-- [x] `context/GestureContext.tsx` — convert from `GestureContext.jsx`, update API base URL to `/api` (relative, not `http://localhost:8000`)
-- [x] `hooks/useMediaPipe.ts` — convert from `.js`, preserve singleton pattern exactly
-- [x] `hooks/useGestureModel.ts` — convert from `.js`, type TF.js model
-- [x] `hooks/useMouseControl.ts` — convert from `.js`
-- [x] `hooks/useSocket.ts` — convert from `.js`, type socket events
+- [x] `hooks/useAdminSession.ts` — TanStack Query admin session management
+- [x] `context/GestureContext.tsx` — Gesture provider with relative `/api` base URL
+- [x] `hooks/useMediaPipe.ts` — MediaPipe singleton pattern
+- [x] `hooks/useGestureModel.ts` — TF.js model loader with active-version and SHA-256 validation
+- [x] `hooks/useMouseControl.ts` — OS mouse movement via IPC
+- [x] `hooks/useSocket.ts` — Socket.IO client hook
 
 ### 1.8 Components (`web/components/`)
 - [x] `components/Navbar.tsx`
-- [x] `components/ProtectedRoute.tsx` — use Next.js `redirect()` pattern
+- [x] `components/ProtectedRoute.tsx` — Protected admin route wrapper
 - [x] `components/WebcamView.tsx`
 - [x] `components/ConfidenceBar.tsx`
 - [x] `components/GestureDisplay.tsx`
 - [x] `components/ModeToggle.tsx`
+- [x] `components/ModeToggleOverlay.tsx`
+- [x] `components/MirrorFogOverlay.tsx`
 
 ### 1.9 Pages (`web/app/`)
-- [x] `app/layout.tsx` — root layout with `AuthProvider`, `GestureProvider`, `Navbar`
-- [x] `app/page.tsx` — Landing page (SSR, no `"use client"`)
-- [x] `app/(auth)/login/page.tsx` — Login page
-- [x] `app/(auth)/register/page.tsx` — Register page
-- [x] `app/recognition/page.tsx` — `"use client"` (webcam + real-time recognition)
-- [x] `app/history/page.tsx` — `"use client"`
-- [x] `app/ml/collect/page.tsx` — `"use client"` (data collector)
-- [x] `app/ml/import/page.tsx` — `"use client"`
+- [x] `app/layout.tsx` — root layout with `QueryProvider`, `GestureProvider`, `Navbar`
+- [x] `app/page.tsx` — Primary interactive recognition and OS control dashboard (`"use client"`)
+- [x] `app/admin/login/page.tsx` — Admin login page
+- [x] `app/admin/signup/page.tsx` — Admin bootstrap signup page
+- [x] `app/recognition/page.tsx` — Dedicated recognition view (`"use client"`)
+- [x] `app/ml/history/page.tsx` — Gesture history view (`"use client"`)
+- [x] `app/ml/collect/page.tsx` — Data collector (`"use client"`)
+- [x] `app/ml/import/page.tsx` — Dataset importer (`"use client"`)
 
 ### 1.10 Styling
 - [x] Migrate `client/src/index.css` → `web/app/globals.css`

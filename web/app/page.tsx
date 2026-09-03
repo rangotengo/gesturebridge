@@ -23,6 +23,7 @@ import { useBlowDetection } from '@/hooks/useBlowDetection';
 import { useFacePucker } from '@/hooks/useFacePucker';
 import type { ControlMode } from '@/features/control/modes';
 import { mapRawLandmarkToMirroredCoverViewport } from '@/features/control/pointerTracking';
+import { saveCollectedSamples, trainDatasetModel } from '@/features/datasets/queries';
 
 
 const LOG_THROTTLE_MS = 2000;
@@ -339,19 +340,7 @@ function HomePage(): React.ReactElement {
     setIsSubmittingSamples(true);
     setImproveMessage(null);
     try {
-      const res = await fetch('/api/ml/collect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ samples: capturedSamples }),
-      });
-      const data = await res.json() as {
-        success?: boolean;
-        message?: string;
-        error?: string;
-        acceptedCount?: number;
-        rejectedCount?: number;
-        rejectedIndices?: number[];
-      };
+      const data = await saveCollectedSamples(capturedSamples);
       if (data.success) {
         const accepted = data.acceptedCount ?? capturedSamples.length;
         const rejected = data.rejectedCount ?? 0;
@@ -380,58 +369,16 @@ function HomePage(): React.ReactElement {
     setIsTrainingModel(true);
     setImproveMessage({ type: 'info', text: 'Starting model training on server...' });
     try {
-      const res = await fetch('/api/ml/train', { method: 'POST' });
-      if (!res.ok && res.status !== 202) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? 'Failed to start training');
-      }
-
-      const trainData = (await res.json().catch(() => ({}))) as { jobId?: string };
-      const jobId = trainData.jobId;
-
       setImproveMessage({ type: 'info', text: 'Training in progress on server (~10-20s)...' });
-
-      const startTime = Date.now();
-      let completed = false;
-      const statusUrl = jobId ? `/api/ml/status?jobId=${encodeURIComponent(jobId)}` : `/api/ml/status?t=${Date.now()}`;
-      while (Date.now() - startTime < 180_000) {
-        await new Promise((r) => setTimeout(r, 1000));
-        const statusRes = await fetch(statusUrl);
-        if (statusRes.ok) {
-          const statusData = (await statusRes.json()) as {
-            training?: {
-              state: 'idle' | 'running' | 'succeeded' | 'failed';
-              jobId?: string | null;
-              lastResult?: {
-                message?: string;
-                samplesCount?: number;
-                trainingAccuracy?: number;
-                validationAccuracy?: number;
-              };
-              errorCode?: string;
-            };
-          };
-          const state = statusData.training?.state;
-          if (state === 'succeeded') {
-            completed = true;
-            setImproveMessage({ type: 'info', text: 'Training complete! Hot-reloading new model...' });
-            const reloaded = await reloadModel();
-            setImproveMessage({
-              type: reloaded ? 'success' : 'error',
-              text: reloaded
-                ? `AI model retrained (${statusData.training?.lastResult?.samplesCount ?? ''} samples) and reloaded! Test it above.`
-                : 'Retrained but failed to reload. Please refresh the page.',
-            });
-            break;
-          } else if (state === 'failed') {
-            completed = true;
-            throw new Error(statusData.training?.errorCode ?? 'Training failed on the server.');
-          }
-        }
-      }
-      if (!completed) {
-        throw new Error('Training job timed out.');
-      }
+      const result = await trainDatasetModel();
+      setImproveMessage({ type: 'info', text: 'Training complete! Hot-reloading new model...' });
+      const reloaded = await reloadModel();
+      setImproveMessage({
+        type: reloaded ? 'success' : 'error',
+        text: reloaded
+          ? `AI model retrained (${result.samplesCount ?? ''} samples) and reloaded! Test it above.`
+          : 'Retrained but failed to reload. Please refresh the page.',
+      });
     } catch (err) {
       setImproveMessage({ type: 'error', text: err instanceof Error ? err.message : 'Training failed' });
     } finally {

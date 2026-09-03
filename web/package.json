@@ -11,7 +11,7 @@
     "predev": "npm run prepare:mediapipe",
     "dev": "ts-node --project tsconfig.server.json server.ts",
     "prebuild": "npm run prepare:mediapipe",
-    "build": "next build && npm run build:server",
+    "build": "next build --webpack && npm run build:server",
     "build:server": "tsc --project tsconfig.server.json",
     "start": "NODE_ENV=production node dist-server/server.js",
     "lint": "eslint .",
