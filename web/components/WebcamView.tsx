@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { useMediaPipe } from '@/hooks/useMediaPipe';
 import type { HandData } from '@/ml/gestureUtils';
 
@@ -8,6 +8,8 @@ interface WebcamViewProps {
   onLandmarksUpdate: (hands: HandData[]) => void;
   /** Called once after the first frame is processed — used to dismiss the init overlay */
   onFirstFrame?: () => void;
+  /** Called when a camera or MediaPipe initialization error occurs or is cleared */
+  onError?: (error: string | null) => void;
   /** When false, stops camera tracks and MediaPipe processing. */
   isActive?: boolean;
   isCompact?: boolean;
@@ -24,6 +26,7 @@ interface WebcamViewProps {
 export default function WebcamView({
   onLandmarksUpdate,
   onFirstFrame,
+  onError,
   isActive = true,
   isCompact = false,
   layout = 'viewport',
@@ -45,8 +48,12 @@ export default function WebcamView({
     }
   }, [onLandmarksUpdate, onFirstFrame]);
 
+  const { error, retry } = useMediaPipe(videoRef, canvasRef, handleHands, isActive);
 
-  const { error } = useMediaPipe(videoRef, canvasRef, handleHands, isActive);
+  useEffect(() => {
+    onError?.(error);
+  }, [error, onError]);
+
   const isEmbedded = layout === 'embedded';
   const frameLayoutClasses = isEmbedded
     ? 'absolute inset-0 h-full w-full'
@@ -94,7 +101,7 @@ export default function WebcamView({
         <div className={`${frameLayoutClasses} z-0 bg-black flex items-center justify-center`}>
           <div className="text-center">
             <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto mb-3 text-white/20" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="1" y1="1" x2="23" y2="23" />
+              <line x1="1" y1="23" x2="23" y2="1" />
               <path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34m-7.72-2.06A4 4 0 1 1 8.71 8.71" />
             </svg>
             <p className="font-mono text-xs text-white/20 tracking-widest uppercase">Camera Off</p>
@@ -102,15 +109,25 @@ export default function WebcamView({
         </div>
       )}
 
-      {/* Error state */}
+      {/* Error state with retry action */}
       {error && (
         <div
           className={`${
             isEmbedded ? 'absolute inset-x-0 top-3' : 'fixed inset-x-0 top-16'
-          } z-20 flex justify-center pointer-events-none`}
+          } z-50 flex justify-center px-4`}
         >
-          <div className="bg-red-900/80 border border-red-500/40 px-4 py-2 font-mono text-xs text-red-300 tracking-widest uppercase">
-            ⚠ {error}
+          <div className="bg-red-950/90 border border-red-500/60 rounded-xl px-5 py-3.5 shadow-2xl flex flex-col sm:flex-row items-center gap-3 max-w-lg pointer-events-auto backdrop-blur-md">
+            <div className="flex items-center gap-2 text-red-300 text-xs font-mono">
+              <span className="text-base leading-none" aria-hidden="true">⚠️</span>
+              <span>{error}</span>
+            </div>
+            <button
+              type="button"
+              onClick={retry}
+              className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-mono text-xs font-medium uppercase tracking-wider transition-colors shrink-0 shadow cursor-pointer"
+            >
+              Retry Camera
+            </button>
           </div>
         </div>
       )}

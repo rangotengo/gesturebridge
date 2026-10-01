@@ -29,6 +29,7 @@ export default function Navbar(): React.ReactElement {
             <Link href="/ml/collect" className="nav-link">Collect</Link>
             <Link href="/ml/import" className="nav-link">Import</Link>
             <Link href="/ml/history" className="nav-link">History</Link>
+            <Link href="/ml/evaluation" className="nav-link">Evaluation</Link>
           </>
         )}
         {isAdmin ? (
@@ -62,6 +63,7 @@ export default function Navbar(): React.ReactElement {
               <Link href="/ml/collect" className="rounded px-3 py-2 text-sm text-white" onClick={closeMenu}>Collect</Link>
               <Link href="/ml/import" className="rounded px-3 py-2 text-sm text-white" onClick={closeMenu}>Import</Link>
               <Link href="/ml/history" className="rounded px-3 py-2 text-sm text-white" onClick={closeMenu}>History</Link>
+              <Link href="/ml/evaluation" className="rounded px-3 py-2 text-sm text-white" onClick={closeMenu}>Evaluation</Link>
             </>
           )}
           <Link

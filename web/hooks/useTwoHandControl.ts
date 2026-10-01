@@ -75,9 +75,42 @@ export function useTwoHandControl(
     }
   }, [modifierLandmarks, modifierGestureLabel, mouseModeActive]);
 
-  // Clean up: Always release drag mouse button on unmount / cleanup
+  // External release synchronization: window blur, page visibility change, desktop drag-released, and emergency-stop
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleWindowBlur = (): void => {
+      stopDragging();
+    };
+
+    const handleVisibilityChange = (): void => {
+      if (document.hidden) {
+        stopDragging();
+      }
+    };
+
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const unsubscribeDrag = window.electronAPI?.onDragReleased?.(() => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        setIsDragging(false);
+      }
+    });
+
+    const unsubscribeEmergency = window.electronAPI?.onEmergencyStop?.(() => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        setIsDragging(false);
+      }
+    });
+
     return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribeDrag?.();
+      unsubscribeEmergency?.();
       stopDragging();
     };
   }, []);

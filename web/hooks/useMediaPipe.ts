@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Landmark, Handedness, HandData } from '@/ml/gestureUtils';
 
 // ---- MediaPipe global types ----
@@ -225,9 +225,11 @@ export function useMediaPipe(
 ): {
   isLoading: boolean;
   error: string | null;
+  retry: () => void;
 } {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -237,6 +239,12 @@ export function useMediaPipe(
   useEffect(() => {
     onHandsUpdateRef.current = onHandsUpdate;
   }, [onHandsUpdate]);
+
+  const retry = useCallback((): void => {
+    setError(null);
+    setIsLoading(true);
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   // Per-hand dedup: undefined = "no result yet" (sentinel)
   const lastLandmarksMapRef = useRef<Map<Handedness, Landmark[] | undefined>>(
@@ -318,41 +326,31 @@ export function useMediaPipe(
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-          // Draw in raw MediaPipe space. WebcamView applies one shared CSS
-          // horizontal mirror to the video + canvas plane so they stay aligned.
+          const rawLandmarks = results.multiHandLandmarks;
+          const rawHandedness = results.multiHandedness?.map((h) => mirrorHandedness(h.label));
 
           const detectedHands: HandData[] = [];
           const currentHandSet = new Set<Handedness>();
-          const rawLandmarks: Landmark[][] = [];
-          const rawHandedness: Handedness[] = [];
 
-          if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-              const landmarks = results.multiHandLandmarks[i];
-              const handednessEntry = results.multiHandedness?.[i];
-              const handedness = handednessEntry
-                ? mirrorHandedness(handednessEntry.label)
-                : (i === 0 ? 'Right' : 'Left');
+          if (rawLandmarks && rawLandmarks.length > 0) {
+            for (let i = 0; i < rawLandmarks.length; i++) {
+              const landmarks = rawLandmarks[i];
+              if (!landmarks || landmarks.length === 0) continue;
 
+              const handednessLabel = results.multiHandedness?.[i]?.label ?? 'Left';
+              const handedness = mirrorHandedness(handednessLabel);
+              detectedHands.push({ handedness, landmarks });
               currentHandSet.add(handedness);
-              detectedHands.push({ landmarks, handedness });
 
-              rawLandmarks.push(landmarks);
-              rawHandedness.push(
-                handednessEntry
-                  ? (handednessEntry.label as Handedness)
-                  : (i === 0 ? 'Left' : 'Right')
-              );
-
-              // Per-hand skeleton drawing with distinct colors
               const colors = HAND_COLORS[handedness] ?? FALLBACK_COLORS;
 
-              if (activeDrawConnectors && ActiveHandConnections) {
+              if (ActiveHandConnections && activeDrawConnectors) {
                 activeDrawConnectors(canvasCtx, landmarks, ActiveHandConnections, {
                   color: colors.connection,
-                  lineWidth: 1.5,
+                  lineWidth: 2,
                 });
               }
+
               if (activeDrawLandmarks) {
                 activeDrawLandmarks(canvasCtx, landmarks, {
                   color: colors.joint,
@@ -423,6 +421,9 @@ export function useMediaPipe(
         // Become the active consumer
         activeResultsHandler = myResultsHandler;
 
+        let consecutiveFrameErrors = 0;
+        const MAX_CONSECUTIVE_FRAME_ERRORS = 5;
+
         const processFrame = async (): Promise<void> => {
           if (isCancelled) return;
           try {
@@ -430,22 +431,45 @@ export function useMediaPipe(
             if (video && video.readyState >= 2) {
               await hands.send({ image: video });
             }
+            consecutiveFrameErrors = 0;
             animationFrameRef.current = requestAnimationFrame(() => {
               void processFrame();
             });
           } catch (err) {
             if (isCancelled) return;
-            const msg = err instanceof Error ? err.message : 'Error processing camera frames';
-            console.error('MediaPipe frame processing error:', err);
-            setError(msg);
-            setIsLoading(false);
+            consecutiveFrameErrors += 1;
+            console.warn(`MediaPipe frame processing warning (${consecutiveFrameErrors}/${MAX_CONSECUTIVE_FRAME_ERRORS}):`, err);
+
+            if (consecutiveFrameErrors >= MAX_CONSECUTIVE_FRAME_ERRORS) {
+              const msg = err instanceof Error ? err.message : 'Error processing camera frames';
+              console.error('MediaPipe fatal frame processing error:', err);
+              setError(msg);
+              setIsLoading(false);
+              return;
+            }
+
+            // Attempt recovery with backoff delay instead of killing the loop permanently
+            animationFrameRef.current = window.setTimeout(() => {
+              void processFrame();
+            }, 120) as unknown as number;
           }
         };
 
         void processFrame();
       } catch (err) {
         if (isCancelled) return;
-        const msg = err instanceof Error ? err.message : 'MediaPipe init failed';
+        let msg = 'MediaPipe initialization failed';
+        if (err instanceof Error) {
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            msg = 'Camera permission was denied. Please allow camera access in your browser settings and click Retry.';
+          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            msg = 'No camera device was found. Please connect a webcam and click Retry.';
+          } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+            msg = 'The webcam is currently in use by another application or process. Please close it and click Retry.';
+          } else {
+            msg = err.message || 'MediaPipe initialization failed';
+          }
+        }
         console.error('MediaPipe initialization error:', err);
         setError(msg);
         setIsLoading(false);
@@ -470,10 +494,15 @@ export function useMediaPipe(
       }
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
+        clearTimeout(animationFrameRef.current);
         animationFrameRef.current = null;
       }
     };
-  }, [canvasRef, enabled, videoRef]); // Releasing and reacquiring camera is intentional when enabled changes.
+  }, [canvasRef, enabled, videoRef, retryNonce]); // Releasing and reacquiring camera is intentional when enabled changes.
 
-  return { isLoading: enabled ? isLoading : false, error: enabled ? error : null };
+  return {
+    isLoading: enabled ? isLoading : false,
+    error: enabled ? error : null,
+    retry,
+  };
 }
