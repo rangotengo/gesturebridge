@@ -32,5 +32,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('control:emergency-stop', handler);
     };
   },
+  onDragReleased: (callback: (data: { buttons: ('left' | 'right')[]; reason: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { buttons: ('left' | 'right')[]; reason: string }): void => {
+      callback(data);
+    };
+    ipcRenderer.on('mouse:drag-released', handler);
+    return () => {
+      ipcRenderer.removeListener('mouse:drag-released', handler);
+    };
+  },
   isElectron: true,
 });

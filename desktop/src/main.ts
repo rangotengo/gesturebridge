@@ -25,6 +25,7 @@ import {
   isZoomDirection,
   parsePointPayload,
   type MouseToggleButton,
+  HeldButtonTracker,
 } from './security';
 
 interface RobotModule {
@@ -41,7 +42,7 @@ let normalBounds: Electron.Rectangle | null = null;
 let robotModule: RobotModule | null | undefined;
 let trustedOrigin = '';
 const sessionAuthToken = crypto.randomBytes(32).toString('hex');
-const heldMouseButtons = new Set<MouseToggleButton>();
+const heldMouseButtons = new HeldButtonTracker();
 
 const ipcRateLimiter = new IpcRateLimiter();
 
@@ -149,23 +150,37 @@ function configurePermissionGuards(allowedOrigin: string): void {
   );
 }
 
-function releaseHeldMouseButtons(): void {
-  const robot = getRobot();
-  if (!robot || heldMouseButtons.size === 0) return;
+function releaseHeldMouseButtons(reason: string = 'manual'): void {
+  const result = heldMouseButtons.releaseAll(reason);
+  if (!result) return;
 
-  for (const button of heldMouseButtons) {
-    try {
-      robot.mouseToggle('up', button);
-    } catch (err) {
-      console.error(`Error releasing held ${button} mouse button:`, err);
+  const robot = getRobot();
+  if (robot) {
+    for (const button of result.buttons) {
+      try {
+        robot.mouseToggle('up', button);
+      } catch (err) {
+        console.error(`Error releasing held ${button} mouse button:`, err);
+      }
     }
   }
-  heldMouseButtons.clear();
+  deadmanTimer.cancel();
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('mouse:drag-released', {
+        buttons: result.buttons,
+        reason: result.reason,
+      });
+    } catch (err) {
+      console.error('Failed to notify renderer of button release:', err);
+    }
+  }
 }
 
 const deadmanTimer = new DeadmanTimer(DEADMAN_TIMEOUT_MS, () => {
   logDiagnostic('deadman-timeout-fired-releasing-buttons');
-  releaseHeldMouseButtons();
+  releaseHeldMouseButtons('deadman-timeout');
 });
 
 function restoreNormalBounds(): void {
@@ -187,7 +202,7 @@ function restoreNormalBounds(): void {
 
 function emergencyStop(): void {
   deadmanTimer.cancel();
-  releaseHeldMouseButtons();
+  releaseHeldMouseButtons('emergency-stop');
   restoreNormalBounds();
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
@@ -267,7 +282,7 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
   });
 
   mainWindow.on('blur', () => {
-    releaseHeldMouseButtons();
+    releaseHeldMouseButtons('window-blur');
   });
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -277,7 +292,7 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
 
   mainWindow.on('closed', () => {
     deadmanTimer.cancel();
-    releaseHeldMouseButtons();
+    releaseHeldMouseButtons('window-closed');
     ipcRateLimiter.clear();
     mainWindow = null;
   });
@@ -357,7 +372,7 @@ ipcMain.on('mouse:move', (event, payload: unknown) => {
   const robot = getRobot();
   if (!robot) return;
 
-  if (heldMouseButtons.size > 0) {
+  if (heldMouseButtons.size() > 0) {
     deadmanTimer.heartbeat();
   }
 
@@ -426,11 +441,11 @@ ipcMain.on('mouse:button', (event, payload: unknown) => {
   try {
     robot.mouseToggle(payload.action, payload.button);
     if (payload.action === 'down') {
-      heldMouseButtons.add(payload.button);
+      heldMouseButtons.press(payload.button);
       deadmanTimer.heartbeat();
     } else {
-      heldMouseButtons.delete(payload.button);
-      if (heldMouseButtons.size === 0) {
+      heldMouseButtons.release(payload.button);
+      if (heldMouseButtons.size() === 0) {
         deadmanTimer.cancel();
       }
     }

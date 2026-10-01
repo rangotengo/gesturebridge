@@ -182,3 +182,30 @@ export class DeadmanTimer {
     return this.timer !== null;
   }
 }
+
+export class HeldButtonTracker {
+  private heldButtons = new Set<MouseToggleButton>();
+
+  public press(button: MouseToggleButton): void {
+    this.heldButtons.add(button);
+  }
+
+  public release(button: MouseToggleButton): boolean {
+    return this.heldButtons.delete(button);
+  }
+
+  public has(button: MouseToggleButton): boolean {
+    return this.heldButtons.has(button);
+  }
+
+  public releaseAll(reason: string = 'manual'): { buttons: MouseToggleButton[]; reason: string } | null {
+    if (this.heldButtons.size === 0) return null;
+    const buttons = Array.from(this.heldButtons);
+    this.heldButtons.clear();
+    return { buttons, reason };
+  }
+
+  public size(): number {
+    return this.heldButtons.size;
+  }
+}
