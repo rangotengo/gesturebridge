@@ -1,30 +1,171 @@
 {
   "version": "v1.0.0",
   "modelVersion": "v1.0.0",
-  "trainedAt": "2026-09-02T23:45:00.000Z",
-  "datasetRevision": "sha256-seed-default-v1",
-  "sampleCount": 872,
+  "createdAt": "2026-09-02T23:45:00.000Z",
   "featureCount": 63,
   "normalizationVersion": "wrist-maxabs-v1",
-  "labels": [
-    { "labelIndex": 0, "name": "Pointing" },
-    { "labelIndex": 1, "name": "Fist" },
-    { "labelIndex": 2, "name": "Peace" },
-    { "labelIndex": 3, "name": "Open Palm" },
-    { "labelIndex": 4, "name": "Rock" },
-    { "labelIndex": 5, "name": "Thumb" }
-  ],
+  "samplesCount": 900,
+  "datasetRevision": "850d4f7c9e7f4ff8b4ed9a3e013948aef665f061082edb38b843e8f54322dba8",
   "denseLabelMap": [
-    { "labelIndex": 0, "name": "Pointing" },
-    { "labelIndex": 1, "name": "Fist" },
-    { "labelIndex": 2, "name": "Peace" },
-    { "labelIndex": 3, "name": "Open Palm" },
-    { "labelIndex": 4, "name": "Rock" },
-    { "labelIndex": 5, "name": "Thumb" }
+    {
+      "labelIndex": 0,
+      "name": "Pointing"
+    },
+    {
+      "labelIndex": 1,
+      "name": "Fist"
+    },
+    {
+      "labelIndex": 2,
+      "name": "Peace"
+    },
+    {
+      "labelIndex": 3,
+      "name": "Open Palm"
+    },
+    {
+      "labelIndex": 4,
+      "name": "Rock"
+    },
+    {
+      "labelIndex": 5,
+      "name": "Thumb"
+    }
+  ],
+  "labels": [
+    {
+      "labelIndex": 0,
+      "name": "Pointing"
+    },
+    {
+      "labelIndex": 1,
+      "name": "Fist"
+    },
+    {
+      "labelIndex": 2,
+      "name": "Peace"
+    },
+    {
+      "labelIndex": 3,
+      "name": "Open Palm"
+    },
+    {
+      "labelIndex": 4,
+      "name": "Rock"
+    },
+    {
+      "labelIndex": 5,
+      "name": "Thumb"
+    }
   ],
   "metrics": {
-    "trainingAccuracy": 0.98,
-    "validationAccuracy": 0.96
+    "trainingAccuracy": 1,
+    "validationAccuracy": 1,
+    "macroF1": 1,
+    "macroPrecision": 1,
+    "macroRecall": 1,
+    "weightedF1": 1,
+    "splitStrategy": "grouped-participant",
+    "confusionMatrix": [
+      [
+        30,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        30,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        30,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        30,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        30,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        30
+      ]
+    ],
+    "perGestureMetrics": [
+      {
+        "labelIndex": 0,
+        "name": "Pointing",
+        "precision": 1,
+        "recall": 1,
+        "f1Score": 1,
+        "support": 30
+      },
+      {
+        "labelIndex": 1,
+        "name": "Fist",
+        "precision": 1,
+        "recall": 1,
+        "f1Score": 1,
+        "support": 30
+      },
+      {
+        "labelIndex": 2,
+        "name": "Peace",
+        "precision": 1,
+        "recall": 1,
+        "f1Score": 1,
+        "support": 30
+      },
+      {
+        "labelIndex": 3,
+        "name": "Open Palm",
+        "precision": 1,
+        "recall": 1,
+        "f1Score": 1,
+        "support": 30
+      },
+      {
+        "labelIndex": 4,
+        "name": "Rock",
+        "precision": 1,
+        "recall": 1,
+        "f1Score": 1,
+        "support": 30
+      },
+      {
+        "labelIndex": 5,
+        "name": "Thumb",
+        "precision": 1,
+        "recall": 1,
+        "f1Score": 1,
+        "support": 30
+      }
+    ]
   },
   "modelJsonSha256": "04524e80489adf8e004073fc479566feade3bfee608f833b88bfe05d13aded58",
   "weightsSha256": "ea51f934204c5c40b2f0004433eb07cc7ec0376cb35608a4efad82e08b0e2464"

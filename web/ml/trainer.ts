@@ -24,6 +24,7 @@ import {
   getTrainingLeaseRenewalIntervalMs,
   readTrainingStatus,
   renewTrainingLease,
+  isTrainingLeaseValid,
   type TrainingLease,
   type TrainResult,
   type TrainingStatus,
@@ -34,10 +35,13 @@ import {
   createModelManifest,
   createSeededRandom,
   getMaxTrainingSamples,
-  stratifiedSplit,
+  groupAwareSplit,
+  computeDatasetRevision,
+  calculateEvaluationMetrics,
   type ModelManifest,
 } from '@/ml/trainingHelpers';
-import { migrateLegacySamples } from '@/ml/datasetMigration';
+import EvaluationRun from '@/models/EvaluationRun';
+import { migrateLegacySamples, isWristMaxAbsNormalized } from '@/ml/datasetMigration';
 
 export type { TrainResult, TrainingStatus } from '@/ml/trainingState';
 
@@ -157,24 +161,35 @@ export async function trainModel(options?: TrainModelOptions): Promise<TrainResu
 
   let leaseLost = false;
   let renewingLease = false;
+  const renewalIntervalMs = getTrainingLeaseRenewalIntervalMs();
   const renewalTimer = setInterval(() => {
-    if (renewingLease) return;
+    if (renewingLease || leaseLost) return;
     renewingLease = true;
     void renewTrainingLease(lease.ownerId)
       .then((renewed) => {
-        if (!renewed) leaseLost = true;
+        if (!renewed) {
+          leaseLost = true;
+        }
       })
       .catch(() => {
-        leaseLost = true;
+        // Renewal errors are tracked via lease expiration check
       })
       .finally(() => {
         renewingLease = false;
       });
-  }, getTrainingLeaseRenewalIntervalMs());
+  }, renewalIntervalMs);
   renewalTimer.unref();
 
   const ensureLeaseOwnership = async (): Promise<void> => {
-    if (leaseLost || !(await renewTrainingLease(lease.ownerId))) {
+    if (leaseLost) {
+      throw new TrainingError(
+        'The training job lost its execution lease. Please retry.',
+        'TRAINING_LEASE_LOST',
+        503
+      );
+    }
+    const isValid = await isTrainingLeaseValid(lease.ownerId);
+    if (!isValid) {
       leaseLost = true;
       throw new TrainingError(
         'The training job lost its execution lease. Please retry.',
@@ -191,26 +206,33 @@ export async function trainModel(options?: TrainModelOptions): Promise<TrainResu
   let model: tfType.Sequential | null = null;
 
   try {
-    // 1. Ensure all stored samples meet the wrist-maxabs-v1 contract
-    await migrateLegacySamples();
+    // 1. Ensure all stored samples meet the wrist-maxabs-v1 contract (draining all batches)
+    await migrateLegacySamples({ drainAll: true, auditExisting: true });
 
     const maxSamples = getMaxTrainingSamples();
-    const samples = await Sample.find(
+    const rawSamples = await Sample.find(
       { normalizationVersion: 'wrist-maxabs-v1', quarantined: { $ne: true } },
-      { features: 1, label: 1 }
+      { features: 1, label: 1, participantId: 1, sessionId: 1 }
     )
       .sort({ _id: 1 })
       .limit(maxSamples + 1)
       .lean();
-    if (samples.length === 0) {
+
+    if (rawSamples.length === 0) {
       throw new TrainingError('No training data available. Please collect samples first.', 'NO_TRAINING_DATA', 400);
     }
-    if (samples.length > maxSamples) {
+    if (rawSamples.length > maxSamples) {
       throw new TrainingError(
         `Training data exceeds the configured ${maxSamples} sample limit.`,
         'TRAINING_DATA_LIMIT',
         413
       );
+    }
+
+    // Shared feature contract validation: reject degenerate / collapsed samples before training
+    const samples = rawSamples.filter((sample) => isWristMaxAbsNormalized(sample.features));
+    if (samples.length === 0) {
+      throw new TrainingError('No valid non-degenerate training data available. Please collect samples first.', 'NO_TRAINING_DATA', 400);
     }
 
     const gestures = await Gesture.find({}, { name: 1, labelIndex: 1 }).sort({ labelIndex: 1 }).lean();
@@ -237,7 +259,8 @@ export async function trainModel(options?: TrainModelOptions): Promise<TrainResu
       }));
 
     const random = createSeededRandom(activeSamples.length * 31 + denseLabels.length);
-    const { trainingSamples, validationSamples } = stratifiedSplit(activeSamples, random);
+    const splitResult = groupAwareSplit(activeSamples, random, 0.2);
+    const { trainingSamples, validationSamples } = splitResult;
 
     const numClasses = denseLabels.length;
     const labels = denseLabels;
@@ -289,11 +312,51 @@ export async function trainModel(options?: TrainModelOptions): Promise<TrainResu
     });
     const trainingAccuracy = lastMetric(history, ['acc', 'accuracy']);
     const validationAccuracy = lastMetric(history, ['val_acc', 'val_accuracy']);
+
+    // Detailed evaluation on held-out validation set
+    const valPredictionsTensor = model.predict(validationFeaturesTensor) as tfType.Tensor2D;
+    const predIndices = Array.from(valPredictionsTensor.argMax(-1).dataSync());
+    valPredictionsTensor.dispose();
+    const groundTruth = validationSamples.map((s) => s.label);
+
+    const detailedMetrics = calculateEvaluationMetrics(
+      predIndices,
+      groundTruth,
+      denseLabels
+    );
+
     const version = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    const datasetRevision = crypto
-      .createHash('sha256')
-      .update(JSON.stringify(activeSamples.map((sample) => [sample.features, sample.label])))
-      .digest('hex');
+    const datasetRevision = computeDatasetRevision(activeSamples);
+
+    try {
+      await EvaluationRun.create({
+        modelVersion: version,
+        datasetRevision,
+        samplesCount: activeSamples.length,
+        classCount: numClasses,
+        splitStrategy: splitResult.splitStrategy,
+        parameters: {
+          epochs: 50,
+          batchSize: Math.min(32, trainingSamples.length),
+          learningRate: 0.001,
+          optimizer: 'adam',
+        },
+        metrics: {
+          trainingAccuracy: trainingAccuracy ?? detailedMetrics.accuracy,
+          validationAccuracy: validationAccuracy ?? detailedMetrics.accuracy,
+          macroF1: detailedMetrics.macroF1,
+          macroPrecision: detailedMetrics.macroPrecision,
+          macroRecall: detailedMetrics.macroRecall,
+          weightedF1: detailedMetrics.weightedF1,
+          perGestureMetrics: detailedMetrics.perGestureMetrics,
+          confusionMatrix: detailedMetrics.confusionMatrix,
+        },
+        labels: denseLabels,
+      });
+    } catch (evalErr) {
+      console.error('Failed to log evaluation run record:', evalErr);
+    }
+
     await ensureLeaseOwnership();
     await publishModelArtifact(model, {
       version,
@@ -304,7 +367,17 @@ export async function trainModel(options?: TrainModelOptions): Promise<TrainResu
       datasetRevision,
       denseLabelMap: denseLabels,
       labels,
-      metrics: { trainingAccuracy, validationAccuracy },
+      metrics: {
+        trainingAccuracy,
+        validationAccuracy,
+        macroF1: detailedMetrics.macroF1,
+        macroPrecision: detailedMetrics.macroPrecision,
+        macroRecall: detailedMetrics.macroRecall,
+        weightedF1: detailedMetrics.weightedF1,
+        perGestureMetrics: detailedMetrics.perGestureMetrics,
+        confusionMatrix: detailedMetrics.confusionMatrix,
+        splitStrategy: splitResult.splitStrategy,
+      },
     });
 
     const result: TrainResult = {

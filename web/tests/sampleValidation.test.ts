@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { validateImportSampleBatch, validateSampleBatch } from '../lib/sampleValidation';
 
-const features = Array.from({ length: 63 }, (_, index) => index / 63);
+// Standard valid wrist-maxabs-v1 vector: wrist (0, 1, 2) at origin, joint spread, maxAbs = 1.0
+const features = [0, 0, 0, ...Array.from({ length: 60 }, (_, index) => (index + 1) / 60)];
 const knownLabels = new Set([0, 2]);
 
 describe('validateSampleBatch', () => {
@@ -21,7 +22,7 @@ describe('validateSampleBatch', () => {
   it('accepts valid samples without losing label zero', () => {
     const result = validateSampleBatch(
       [
-        { features, label: 0 },
+        { features, label: 0, participantId: 'p1', sessionId: 's1' },
         { features: [...features], label: 2 },
       ],
       knownLabels,
@@ -31,6 +32,8 @@ describe('validateSampleBatch', () => {
     expect(result.rejected).toEqual([]);
     expect(result.accepted).toHaveLength(2);
     expect(result.accepted.map((sample) => sample.label)).toEqual([0, 2]);
+    expect(result.accepted[0]?.participantId).toBe('p1');
+    expect(result.accepted[0]?.sessionId).toBe('s1');
   });
 
   it('partitions invalid rows and preserves their source indexes', () => {
@@ -68,13 +71,25 @@ describe('validateSampleBatch', () => {
       expect(result.rejected[0]?.reason).toBe('All 63 feature values must be finite numbers normalized between -1.0 and 1.0.');
     }
   });
+
+  it('rejects degenerate all-zero feature vectors and non-origin wrist positions', () => {
+    const allZeroes = Array(63).fill(0);
+    const zeroResult = validateSampleBatch([{ features: allZeroes, label: 0 }], knownLabels, 10);
+    expect(zeroResult.accepted).toEqual([]);
+    expect(zeroResult.rejected[0]?.reason).toContain('Degenerate and all-zero vectors are rejected');
+
+    const nonOriginWrist = [0.5, 0.2, -0.1, ...Array(60).fill(0.1)];
+    const wristResult = validateSampleBatch([{ features: nonOriginWrist, label: 0 }], knownLabels, 10);
+    expect(wristResult.accepted).toEqual([]);
+    expect(wristResult.rejected[0]?.reason).toContain('Wrist origin');
+  });
 });
 
 describe('validateImportSampleBatch', () => {
   it('keeps explicit gesture names for transaction-time resolution', () => {
     const result = validateImportSampleBatch(
       [
-        { features, label: 'Custom Wave' },
+        { features, label: 'Custom Wave', participantId: 'p2' },
         { features, label: 0 },
       ],
       10
@@ -82,7 +97,7 @@ describe('validateImportSampleBatch', () => {
 
     expect(result.rejected).toEqual([]);
     expect(result.accepted).toEqual([
-      { features, label: 'Custom Wave', index: 0 },
+      { features, label: 'Custom Wave', index: 0, participantId: 'p2' },
       { features, label: 0, index: 1 },
     ]);
   });

@@ -1,6 +1,10 @@
+import { validateFeatureContract } from '../ml/featureContract';
+
 export interface TrainingSample {
   features: number[];
   label: number;
+  participantId?: string;
+  sessionId?: string;
 }
 
 /**
@@ -11,6 +15,8 @@ export interface TrainingSample {
 export interface ImportSample {
   features: number[];
   label: number | string;
+  participantId?: string;
+  sessionId?: string;
 }
 
 export interface ValidatedImportSample extends ImportSample {
@@ -36,6 +42,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function parseOptionalId(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && trimmed.length <= 64) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 function validateTrainingSample(
   sample: unknown,
   index: number,
@@ -45,19 +61,12 @@ function validateTrainingSample(
     return { ok: false, rejected: { index, reason: 'Sample must be an object.' } };
   }
 
-  const { features, label } = sample;
-  if (!Array.isArray(features) || features.length !== 63) {
-    return { ok: false, rejected: { index, reason: 'Features must contain exactly 63 values.' } };
-  }
-
-  if (
-    !features.every(
-      (value) => typeof value === 'number' && Number.isFinite(value) && value >= -1.0001 && value <= 1.0001
-    )
-  ) {
+  const { features, label, participantId, sessionId } = sample;
+  const featureCheck = validateFeatureContract(features);
+  if (!featureCheck.valid) {
     return {
       ok: false,
-      rejected: { index, reason: 'All 63 feature values must be finite numbers normalized between -1.0 and 1.0.' },
+      rejected: { index, reason: featureCheck.reason ?? 'Features do not satisfy the wrist-maxabs-v1 contract.' },
     };
   }
 
@@ -69,7 +78,18 @@ function validateTrainingSample(
     return { ok: false, rejected: { index, reason: `Unknown gesture label: ${label}.` } };
   }
 
-  return { ok: true, sample: { features, label } };
+  const parsedParticipantId = parseOptionalId(participantId);
+  const parsedSessionId = parseOptionalId(sessionId);
+
+  return {
+    ok: true,
+    sample: {
+      features: features as number[],
+      label,
+      ...(parsedParticipantId ? { participantId: parsedParticipantId } : {}),
+      ...(parsedSessionId ? { sessionId: parsedSessionId } : {}),
+    },
+  };
 }
 
 function validateImportSample(
@@ -80,27 +100,32 @@ function validateImportSample(
     return { ok: false, rejected: { index, reason: 'Sample must be an object.' } };
   }
 
-  const { features, label } = sample;
-  if (!Array.isArray(features) || features.length !== 63) {
-    return { ok: false, rejected: { index, reason: 'Features must contain exactly 63 values.' } };
-  }
-
-  if (
-    !features.every(
-      (value) => typeof value === 'number' && Number.isFinite(value) && value >= -1.0001 && value <= 1.0001
-    )
-  ) {
+  const { features, label, participantId, sessionId } = sample;
+  const featureCheck = validateFeatureContract(features);
+  if (!featureCheck.valid) {
     return {
       ok: false,
-      rejected: { index, reason: 'All 63 feature values must be finite numbers normalized between -1.0 and 1.0.' },
+      rejected: { index, reason: featureCheck.reason ?? 'Features do not satisfy the wrist-maxabs-v1 contract.' },
     };
   }
+
+  const parsedParticipantId = parseOptionalId(participantId);
+  const parsedSessionId = parseOptionalId(sessionId);
 
   if (typeof label === 'number') {
     if (!Number.isInteger(label) || label < 0) {
       return { ok: false, rejected: { index, reason: 'Numeric labels must be non-negative integers.' } };
     }
-    return { ok: true, sample: { features, label, index } };
+    return {
+      ok: true,
+      sample: {
+        features: features as number[],
+        label,
+        index,
+        ...(parsedParticipantId ? { participantId: parsedParticipantId } : {}),
+        ...(parsedSessionId ? { sessionId: parsedSessionId } : {}),
+      },
+    };
   }
 
   if (typeof label !== 'string' || !label.trim() || label.trim().length > 64) {
@@ -110,7 +135,16 @@ function validateImportSample(
     };
   }
 
-  return { ok: true, sample: { features, label: label.trim(), index } };
+  return {
+    ok: true,
+    sample: {
+      features: features as number[],
+      label: label.trim(),
+      index,
+      ...(parsedParticipantId ? { participantId: parsedParticipantId } : {}),
+      ...(parsedSessionId ? { sessionId: parsedSessionId } : {}),
+    },
+  };
 }
 
 export function validateSampleBatch(

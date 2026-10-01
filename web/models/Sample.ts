@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
+import { isWristMaxAbsNormalized } from '../ml/featureContract';
 
 export interface ISample extends Document {
   features: number[];
@@ -7,6 +8,9 @@ export interface ISample extends Document {
   source: 'collection' | 'import' | 'seed';
   normalizationVersion: string;
   datasetRevision?: string;
+  participantId?: string;
+  sessionId?: string;
+  importBatchId?: string;
   quarantined?: boolean;
   quarantineReason?: string;
 }
@@ -24,14 +28,17 @@ const sampleSchema = new Schema<ISample>({
   source: { type: String, enum: ['collection', 'import', 'seed'], default: 'collection' },
   normalizationVersion: { type: String, default: 'wrist-maxabs-v1', maxlength: 64 },
   datasetRevision: { type: String, maxlength: 128 },
+  participantId: { type: String, maxlength: 64, index: true },
+  sessionId: { type: String, maxlength: 64, index: true },
+  importBatchId: { type: String, maxlength: 64, index: true },
   quarantined: { type: Boolean, default: false, index: true },
   quarantineReason: { type: String, maxlength: 256 },
   createdAt: { type: Date, default: Date.now },
 });
 
 sampleSchema.path('features').validate(
-  (arr: number[]) => arr.every((value) => Number.isFinite(value) && value >= -1.0001 && value <= 1.0001),
-  'Features must contain only finite numbers normalized in [-1, 1]'
+  (arr: number[]) => isWristMaxAbsNormalized(arr),
+  'Features must satisfy the non-degenerate wrist-maxabs-v1 contract (wrist at origin, scaled, finite numbers in [-1, 1])'
 );
 sampleSchema.index({ label: 1, createdAt: -1 });
 sampleSchema.index({ createdAt: -1 });

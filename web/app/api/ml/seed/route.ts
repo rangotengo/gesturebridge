@@ -89,7 +89,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await connectDB();
 
     const SAMPLES_PER_GESTURE = 30;
-    const generated: { features: number[]; label: number }[] = [];
+    const generated: { features: number[]; label: number; participantId?: string; sessionId?: string }[] = [];
 
     for (let label = 0; label < 6; label++) {
       const config = GESTURE_CONFIGS[label];
@@ -98,9 +98,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       for (let s = 0; s < SAMPLES_PER_GESTURE; s++) {
         const landmarks = generateHandLandmarks(config);
         const normalized = normalizeLandmarks(landmarks);
+        const participantNum = (s % 4) + 1;
         generated.push({
           features: normalized,
           label,
+          participantId: `participant-0${participantNum}`,
+          sessionId: `session-p0${participantNum}-g0${label}`,
         });
       }
     }

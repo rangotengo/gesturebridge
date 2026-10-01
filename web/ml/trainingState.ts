@@ -182,3 +182,13 @@ export async function failTrainingLease(ownerId: string, errorCode: string): Pro
 export function getTrainingLeaseRenewalIntervalMs(): number {
   return Math.max(30_000, Math.floor(getLeaseDurationMs() / 3));
 }
+
+export async function isTrainingLeaseValid(ownerId: string): Promise<boolean> {
+  const job = await TrainingJob.findOne({
+    _id: GLOBAL_JOB_ID,
+    state: 'running',
+    leaseOwner: ownerId,
+    leaseExpiresAt: { $gt: new Date() },
+  }).lean().exec();
+  return Boolean(job);
+}
