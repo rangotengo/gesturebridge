@@ -5,7 +5,9 @@ const {
   IpcRateLimiter,
   MAX_ABSOLUTE_COORDINATE,
   isAllowedLocalUrl,
+  isAllowedMediaPermission,
   isAllowedNavigation,
+  isTrustedOriginUrl,
   isTrustedSenderUrl,
   parsePointPayload,
 } = require('../dist/security.js');
@@ -30,6 +32,20 @@ test('navigation and IPC sender URLs must stay on the configured app origin', ()
   assert.equal(isTrustedSenderUrl('http://localhost:3000/?mode=mouse', origin), true);
   assert.equal(isTrustedSenderUrl('http://localhost:3000/history', origin), false);
   assert.equal(isTrustedSenderUrl('http://localhost:3000@evil.example/', origin), false);
+
+  assert.equal(isTrustedOriginUrl('http://localhost:3000/', origin), true);
+  assert.equal(isTrustedOriginUrl('http://localhost:3000/history', origin), true);
+  assert.equal(isTrustedOriginUrl('http://localhost:3001/history', origin), false);
+});
+
+test('media permissions allow camera and microphone access', () => {
+  assert.equal(isAllowedMediaPermission('media'), true);
+  assert.equal(isAllowedMediaPermission('camera'), true);
+  assert.equal(isAllowedMediaPermission('microphone'), true);
+  assert.equal(isAllowedMediaPermission('video-capture'), true);
+  assert.equal(isAllowedMediaPermission('audio-capture'), true);
+  assert.equal(isAllowedMediaPermission('geolocation'), false);
+  assert.equal(isAllowedMediaPermission('notifications'), false);
 });
 
 test('mouse coordinates reject malformed, non-finite, and unreasonable values', () => {

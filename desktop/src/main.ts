@@ -5,6 +5,7 @@ import {
   ipcMain,
   screen,
   session,
+  systemPreferences,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
@@ -15,12 +16,13 @@ import {
   DeadmanTimer,
   IpcRateLimiter,
   isAllowedLocalUrl,
+  isAllowedMediaPermission,
   isAllowedNavigation,
   isMouseAction,
   isMouseButton,
   isMouseToggleButton,
   isScrollDirection,
-  isTrustedSenderUrl,
+  isTrustedOriginUrl,
   isValidAuthToken,
   isZoomDirection,
   parsePointPayload,
@@ -103,7 +105,7 @@ function isTrustedIpcSender(
   }
 
   const senderUrl = event.senderFrame?.url ?? event.sender.getURL();
-  if (!isTrustedSenderUrl(senderUrl, trustedOrigin)) {
+  if (!isTrustedOriginUrl(senderUrl, trustedOrigin)) {
     return false;
   }
 
@@ -135,19 +137,77 @@ function clampPointToDisplay(x: number, y: number): { x: number; y: number } {
 }
 
 function configurePermissionGuards(allowedOrigin: string): void {
-  const isTrustedPermissionOrigin = (requestingUrl: string): boolean =>
-    isAllowedNavigation(requestingUrl, allowedOrigin);
+  const isTrustedPermissionOrigin = (requestingUrl: string): boolean => {
+    if (!requestingUrl) return false;
+    return isAllowedNavigation(requestingUrl, allowedOrigin);
+  };
 
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
-    permission === 'media' && isTrustedPermissionOrigin(requestingOrigin)
-  );
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+    const originToCheck = requestingOrigin || webContents?.getURL() || '';
+    const isAllowed =
+      isAllowedMediaPermission(permission) && isTrustedPermissionOrigin(originToCheck);
+    logDiagnostic('permission-check', { permission, requestingOrigin, originToCheck, isAllowed });
+    return isAllowed;
+  });
 
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback, details) => {
-      const requestingUrl = details.requestingUrl || webContents.getURL();
-      callback(permission === 'media' && isTrustedPermissionOrigin(requestingUrl));
+      const requestingUrl = details.requestingUrl || webContents?.getURL() || '';
+      const isAllowed =
+        isAllowedMediaPermission(permission) && isTrustedPermissionOrigin(requestingUrl);
+      const mediaTypes = 'mediaTypes' in details ? details.mediaTypes : undefined;
+      logDiagnostic('permission-request', {
+        permission,
+        requestingUrl,
+        isAllowed,
+        mediaTypes,
+      });
+      callback(isAllowed);
     }
   );
+}
+
+async function ensureDarwinMediaAccess(): Promise<{ camera: boolean; microphone: boolean }> {
+  if (process.platform !== 'darwin') {
+    return { camera: true, microphone: true };
+  }
+
+  let cameraGranted = false;
+  let microphoneGranted = false;
+
+  try {
+    const cameraStatus = systemPreferences.getMediaAccessStatus('camera');
+    logDiagnostic('darwin-camera-status-check', { cameraStatus });
+
+    if (cameraStatus === 'granted') {
+      cameraGranted = true;
+    } else if (cameraStatus === 'not-determined') {
+      cameraGranted = await systemPreferences.askForMediaAccess('camera');
+      logDiagnostic('darwin-camera-prompt-result', { cameraGranted });
+    } else {
+      logDiagnostic('darwin-camera-blocked-by-os', { cameraStatus });
+    }
+  } catch (err) {
+    console.error('Error querying macOS camera access:', err);
+  }
+
+  try {
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    logDiagnostic('darwin-mic-status-check', { micStatus });
+
+    if (micStatus === 'granted') {
+      microphoneGranted = true;
+    } else if (micStatus === 'not-determined') {
+      microphoneGranted = await systemPreferences.askForMediaAccess('microphone');
+      logDiagnostic('darwin-mic-prompt-result', { microphoneGranted });
+    } else {
+      logDiagnostic('darwin-mic-blocked-by-os', { micStatus });
+    }
+  } catch (err) {
+    console.error('Error querying macOS microphone access:', err);
+  }
+
+  return { camera: cameraGranted, microphone: microphoneGranted };
 }
 
 function releaseHeldMouseButtons(reason: string = 'manual'): void {
@@ -336,6 +396,7 @@ if (!gotTheLock) {
     screen.on('display-removed', () => logDiagnostic('display-removed'));
 
     configurePermissionGuards(allowedOrigin);
+    void ensureDarwinMediaAccess();
     createWindow(webUrl, allowedOrigin);
   });
 
@@ -364,6 +425,27 @@ if (!gotTheLock) {
   });
 }
 
+ipcMain.handle('system:request-media-access', async (event, payload: unknown) => {
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'system:request-media-access', 10)) {
+    return { success: false, camera: false, microphone: false, reason: 'untrusted-sender' };
+  }
+  const result = await ensureDarwinMediaAccess();
+  return { success: true, ...result };
+});
+
+ipcMain.handle('system:get-media-status', (event, payload: unknown) => {
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'system:get-media-status', 20)) {
+    return { camera: 'unknown', microphone: 'unknown' };
+  }
+  if (process.platform !== 'darwin') {
+    return { camera: 'granted', microphone: 'granted' };
+  }
+  return {
+    camera: systemPreferences.getMediaAccessStatus('camera'),
+    microphone: systemPreferences.getMediaAccessStatus('microphone'),
+  };
+});
+
 ipcMain.on('mouse:move', (event, payload: unknown) => {
   if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:move', 120)) return;
   const pointPayload = parsePointPayload(payload);
@@ -372,24 +454,23 @@ ipcMain.on('mouse:move', (event, payload: unknown) => {
   const robot = getRobot();
   if (!robot) return;
 
-  if (heldMouseButtons.size() > 0) {
-    deadmanTimer.heartbeat();
-  }
-
   try {
-    const point = clampPointToDisplay(pointPayload.x, pointPayload.y);
-    robot.moveMouse(point.x, point.y);
+    const clamped = clampPointToDisplay(pointPayload.x, pointPayload.y);
+    robot.moveMouse(clamped.x, clamped.y);
+    if (heldMouseButtons.getHeldButtons().length > 0) {
+      deadmanTimer.heartbeat();
+    }
   } catch (err) {
     console.error('Error moving mouse:', err);
   }
 });
 
 ipcMain.on('mouse:click', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:click', 30)) return;
-  if (
-    !isRecord(payload) ||
-    (payload.button !== undefined && !isMouseButton(payload.button))
-  ) {
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:click', 60)) return;
+  if (!isRecord(payload)) return;
+
+  const button = 'button' in payload ? payload.button : 'left';
+  if (button !== undefined && !isMouseButton(button)) {
     return;
   }
 
@@ -397,7 +478,7 @@ ipcMain.on('mouse:click', (event, payload: unknown) => {
   if (!robot) return;
 
   try {
-    robot.mouseClick(payload.button ?? 'left');
+    robot.mouseClick(button ?? 'left');
   } catch (err) {
     console.error('Error clicking mouse:', err);
   }
@@ -419,19 +500,16 @@ ipcMain.on('mouse:scroll', (event, payload: unknown) => {
 
 ipcMain.on('mouse:button', (event, payload: unknown) => {
   if (!isTrustedIpcSender(event, payload)) return;
-  if (
-    typeof payload !== 'object' ||
-    payload === null ||
-    !('button' in payload) ||
-    !('action' in payload) ||
-    !isMouseToggleButton(payload.button) ||
-    !isMouseAction(payload.action)
-  ) {
+  if (!isRecord(payload)) return;
+
+  const button = payload.button;
+  const action = payload.action;
+  if (!isMouseToggleButton(button) || !isMouseAction(action)) {
     return;
   }
 
   // Allow button release ('up') to bypass rate limiting for safety
-  if (payload.action !== 'up' && !consumeIpcRateLimit(event, 'mouse:button', 60)) {
+  if (action !== 'up' && !consumeIpcRateLimit(event, 'mouse:button', 60)) {
     return;
   }
 
@@ -439,13 +517,13 @@ ipcMain.on('mouse:button', (event, payload: unknown) => {
   if (!robot) return;
 
   try {
-    robot.mouseToggle(payload.action, payload.button);
-    if (payload.action === 'down') {
-      heldMouseButtons.press(payload.button);
+    robot.mouseToggle(action, button);
+    if (action === 'down') {
+      heldMouseButtons.press(button);
       deadmanTimer.heartbeat();
     } else {
-      heldMouseButtons.release(payload.button);
-      if (heldMouseButtons.size() === 0) {
+      heldMouseButtons.release(button);
+      if (heldMouseButtons.getHeldButtons().length === 0) {
         deadmanTimer.cancel();
       }
     }

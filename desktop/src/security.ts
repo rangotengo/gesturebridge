@@ -1,3 +1,5 @@
+import * as crypto from 'crypto';
+
 export const IPC_RATE_LIMIT_WINDOW_MS = 1_000;
 export const MAX_ABSOLUTE_COORDINATE = 100_000;
 
@@ -49,6 +51,18 @@ export function isZoomDirection(value: unknown): value is ZoomDirection {
   return value === 'in' || value === 'out';
 }
 
+export const ALLOWED_MEDIA_PERMISSIONS = new Set([
+  'media',
+  'camera',
+  'microphone',
+  'video-capture',
+  'audio-capture',
+]);
+
+export function isAllowedMediaPermission(permission: string): boolean {
+  return ALLOWED_MEDIA_PERMISSIONS.has(permission);
+}
+
 export function parsePointPayload(value: unknown): PointPayload | null {
   if (!isRecord(value) || !isFiniteCoordinate(value.x) || !isFiniteCoordinate(value.y)) {
     return null;
@@ -94,6 +108,15 @@ export function isTrustedSenderUrl(senderUrl: string, trustedOrigin: string): bo
   }
 }
 
+export function isTrustedOriginUrl(senderUrl: string, trustedOrigin: string): boolean {
+  try {
+    const url = new URL(senderUrl);
+    return url.origin === trustedOrigin && isAllowedLocalUrl(senderUrl);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Bounds the number of active renderer/channel entries as well as each channel's event rate.
  * This limiter is process-local; deployment-wide limits belong at the web-server boundary.
@@ -126,39 +149,42 @@ export class IpcRateLimiter {
   }
 
   private prune(now: number): void {
-    for (const [key, entry] of this.entries) {
-      if (now - entry.windowStartedAt >= this.windowMs) this.entries.delete(key);
-    }
-
     if (this.entries.size < this.maxEntries) return;
-    const oldestKeys = [...this.entries.entries()]
-      .sort(([, left], [, right]) => left.windowStartedAt - right.windowStartedAt)
-      .slice(0, this.entries.size - this.maxEntries + 1)
-      .map(([key]) => key);
-    for (const key of oldestKeys) this.entries.delete(key);
+
+    for (const [key, entry] of this.entries.entries()) {
+      if (now - entry.windowStartedAt >= this.windowMs) {
+        this.entries.delete(key);
+      }
+    }
   }
 }
 
 export function isValidAuthToken(payload: unknown, expectedToken: string): boolean {
-  if (!expectedToken || typeof expectedToken !== 'string') return false;
-  if (!isRecord(payload) || typeof payload.token !== 'string') return false;
-  if (payload.token.length !== expectedToken.length) return false;
-  let match = 0;
-  for (let i = 0; i < expectedToken.length; i += 1) {
-    match |= payload.token.charCodeAt(i) ^ expectedToken.charCodeAt(i);
+  if (!expectedToken || !isRecord(payload) || typeof payload.token !== 'string') {
+    return false;
   }
-  return match === 0;
+
+  const tokenBuffer = Buffer.from(payload.token);
+  const expectedBuffer = Buffer.from(expectedToken);
+
+  if (tokenBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(tokenBuffer, expectedBuffer);
 }
 
-export const DEADMAN_TIMEOUT_MS = 1_000;
+export const DEADMAN_TIMEOUT_MS = 3_000;
 
 export class DeadmanTimer {
   private timer: NodeJS.Timeout | null = null;
+  private readonly timeoutMs: number;
+  private readonly onTimeout: () => void;
 
-  public constructor(
-    private readonly timeoutMs: number,
-    private readonly onTimeout: () => void
-  ) {}
+  public constructor(timeoutMs: number, onTimeout: () => void) {
+    this.timeoutMs = timeoutMs;
+    this.onTimeout = onTimeout;
+  }
 
   public heartbeat(): void {
     this.cancel();
@@ -166,9 +192,6 @@ export class DeadmanTimer {
       this.timer = null;
       this.onTimeout();
     }, this.timeoutMs);
-    if (typeof this.timer?.unref === 'function') {
-      this.timer.unref();
-    }
   }
 
   public cancel(): void {
@@ -183,11 +206,20 @@ export class DeadmanTimer {
   }
 }
 
-export class HeldButtonTracker {
-  private heldButtons = new Set<MouseToggleButton>();
+export interface ButtonReleaseResult {
+  buttons: MouseToggleButton[];
+  reason: string;
+}
 
-  public press(button: MouseToggleButton): void {
+export class HeldButtonTracker {
+  private readonly heldButtons = new Set<MouseToggleButton>();
+
+  public press(button: MouseToggleButton): boolean {
+    if (this.heldButtons.has(button)) {
+      return false;
+    }
     this.heldButtons.add(button);
+    return true;
   }
 
   public release(button: MouseToggleButton): boolean {
@@ -198,14 +230,20 @@ export class HeldButtonTracker {
     return this.heldButtons.has(button);
   }
 
-  public releaseAll(reason: string = 'manual'): { buttons: MouseToggleButton[]; reason: string } | null {
-    if (this.heldButtons.size === 0) return null;
+  public size(): number {
+    return this.heldButtons.size;
+  }
+
+  public getHeldButtons(): MouseToggleButton[] {
+    return Array.from(this.heldButtons);
+  }
+
+  public releaseAll(reason: string = 'manual'): ButtonReleaseResult | null {
+    if (this.heldButtons.size === 0) {
+      return null;
+    }
     const buttons = Array.from(this.heldButtons);
     this.heldButtons.clear();
     return { buttons, reason };
-  }
-
-  public size(): number {
-    return this.heldButtons.size;
   }
 }

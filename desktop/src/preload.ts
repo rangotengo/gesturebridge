@@ -25,6 +25,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setCompactMode: (compact: boolean): void => {
     ipcRenderer.send('window:set-compact', { compact, token: appToken });
   },
+  requestMediaAccess: (): Promise<{ success: boolean; camera: boolean; microphone: boolean }> => {
+    return ipcRenderer.invoke('system:request-media-access', { token: appToken }) as Promise<{
+      success: boolean;
+      camera: boolean;
+      microphone: boolean;
+    }>;
+  },
+  getMediaStatus: (): Promise<{ camera: string; microphone: string }> => {
+    return ipcRenderer.invoke('system:get-media-status', { token: appToken }) as Promise<{
+      camera: string;
+      microphone: string;
+    }>;
+  },
   onEmergencyStop: (callback: () => void): (() => void) => {
     const handler = (): void => callback();
     ipcRenderer.on('control:emergency-stop', handler);

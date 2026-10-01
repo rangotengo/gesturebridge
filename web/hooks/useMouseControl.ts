@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { HandData } from '@/ml/gestureUtils';
 import { isPinching } from '@/hooks/usePinchDetector';
 import {
-  PINCH_COOLDOWN_MS,
   CLICK_COOLDOWN_MS,
   SCROLL_INTERVAL_MS,
 } from '@/lib/gestureConfig';
@@ -31,6 +30,8 @@ declare global {
       setCompactMode?: (compact: boolean) => void;
       onEmergencyStop?: (callback: () => void) => () => void;
       onDragReleased?: (callback: (data: { buttons: ('left' | 'right')[]; reason: string }) => void) => () => void;
+      requestMediaAccess?: () => Promise<{ success: boolean; camera: boolean; microphone: boolean }>;
+      getMediaStatus?: () => Promise<{ camera: string; microphone: string }>;
     };
   }
 }
@@ -43,186 +44,153 @@ export function useMouseControl(
 ): void {
   const lastEventTime = useRef(0);
   const THROTTLE_MS = 16; // ~60fps
-  const ZOOM_INTERVAL_MS = 150;
+  const clickCooldownRef = useRef(0);
+  const lastScrollTime = useRef(0);
+  const wasPinchingRef = useRef(false);
+  const pinchStartTimeRef = useRef(0);
+  const isDraggingRef = useRef(false);
+  const lastRawPositionRef = useRef<{ x: number; y: number } | null>(null);
 
-  const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080 });
-  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+  // Settings
+  const [calibration, setCalibration] = useState<CalibrationSettings>(loadCalibrationSettings);
+  const [profile, setProfile] = useState<GestureProfile>(loadActiveProfile);
 
-  const calibrationRef = useRef<CalibrationSettings>(loadCalibrationSettings());
-  const profileRef = useRef<GestureProfile>(loadActiveProfile());
-  const smoothedPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isProfileDraggingRef = useRef<boolean>(false);
-
-  // Track previous states
-  const prevGestureLabelRef = useRef<number>(-1);
-  const prevPinchingRef = useRef<boolean>(false);
-  const lastClickTimesRef = useRef<Record<string, number>>({ left: 0, right: 0, middle: 0 });
-  const lastScrollTimeRef = useRef<number>(0);
-  const lastZoomTimeRef = useRef<number>(0);
-
-  // Sync settings when modified from CalibrationModal or ProfileSelectorModal
   useEffect(() => {
-    const handleCalibration = (e: Event) => {
-      const detail = (e as CustomEvent<CalibrationSettings>).detail;
-      if (detail) calibrationRef.current = detail;
+    const handleSettingsChange = (): void => {
+      setCalibration(loadCalibrationSettings());
+      setProfile(loadActiveProfile());
     };
-    const handleProfile = (e: Event) => {
-      const detail = (e as CustomEvent<GestureProfile>).detail;
-      if (detail) profileRef.current = detail;
-    };
-
-    window.addEventListener('gesturebridge:calibration-updated', handleCalibration);
-    window.addEventListener('gesturebridge:profile-updated', handleProfile);
+    window.addEventListener('storage', handleSettingsChange);
+    window.addEventListener('calibration-updated', handleSettingsChange);
+    window.addEventListener('profile-updated', handleSettingsChange);
     return () => {
-      window.removeEventListener('gesturebridge:calibration-updated', handleCalibration);
-      window.removeEventListener('gesturebridge:profile-updated', handleProfile);
+      window.removeEventListener('storage', handleSettingsChange);
+      window.removeEventListener('calibration-updated', handleSettingsChange);
+      window.removeEventListener('profile-updated', handleSettingsChange);
     };
   }, []);
 
+  // Sync drag release from desktop safety events (e.g. window blur, emergency stop)
   useEffect(() => {
-    async function fetchScreenSize(): Promise<void> {
-      if (isElectron && window.electronAPI) {
-        const size = await window.electronAPI.getScreenSize();
-        setScreenSize((prev) => {
-          if (prev.width === size.width && prev.height === size.height) {
-            return prev;
-          }
-          return size;
-        });
+    if (!window.electronAPI?.onDragReleased) return;
+    const unsubscribe = window.electronAPI.onDragReleased((data) => {
+      if (data.buttons.includes('left') && isDraggingRef.current) {
+        isDraggingRef.current = false;
+        wasPinchingRef.current = false;
+        pinchStartTimeRef.current = 0;
       }
-    }
-    void fetchScreenSize();
-  }, [isElectron]);
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
-    if (!isElectron) return;
-
-    if (!isMouseModeActive) {
-      if (isProfileDraggingRef.current) {
-        window.electronAPI?.mouseButton('left', 'up');
-        isProfileDraggingRef.current = false;
-      }
-      prevGestureLabelRef.current = -1;
-      prevPinchingRef.current = false;
-      smoothedPosRef.current = null;
-      return;
-    }
-
-    if (!dominantHand) {
-      if (isProfileDraggingRef.current) {
-        window.electronAPI?.mouseButton('left', 'up');
-        isProfileDraggingRef.current = false;
+    // Only run if Mouse Mode is active, not frozen, and Electron API is available
+    if (!isMouseModeActive || isFrozen || !window.electronAPI || !dominantHand) {
+      if (isDraggingRef.current && window.electronAPI) {
+        window.electronAPI.mouseButton('left', 'up');
+        isDraggingRef.current = false;
       }
       return;
     }
-
-    const { landmarks } = dominantHand;
-    const prevLabel = prevGestureLabelRef.current;
-    const currLabel = currentGestureLabel;
-    prevGestureLabelRef.current = currLabel;
-
-    const currentAction = profileRef.current.mappings[currLabel] ?? 'none';
-    const prevAction = prevLabel >= 0 ? (profileRef.current.mappings[prevLabel] ?? 'none') : 'none';
 
     const now = Date.now();
+    const landmarks = dominantHand.landmarks;
+    const rawPos = getMirroredIndexTipPosition(landmarks);
+    if (!rawPos) return;
 
-    // ── 1. Geometric Pinch Check with calibrated threshold ──
-    const pinching = isPinching(landmarks, calibrationRef.current.pinchThreshold);
-    const prevPinching = prevPinchingRef.current;
-    prevPinchingRef.current = pinching;
+    // Apply calibration mapping
+    const pointerPos = applyCalibrationMapping(rawPos, calibration);
+    lastRawPositionRef.current = rawPos;
 
-    const isPinchLeadingEdge = !prevPinching && pinching;
-    if (isPinchLeadingEdge) {
-      if (now - lastClickTimesRef.current.left >= PINCH_COOLDOWN_MS) {
-        lastClickTimesRef.current.left = now;
-        window.electronAPI?.mouseClick('left');
-      }
+    // 1. Move Mouse
+    if (now - lastEventTime.current >= THROTTLE_MS) {
+      window.electronAPI.getScreenSize().then((screenSize) => {
+        const coords = mapPointerToScreen(pointerPos, screenSize);
+        window.electronAPI?.mouseMove(coords.x, coords.y);
+        lastEventTime.current = now;
+      }).catch((err: unknown) => {
+        console.error('Failed to get screen size for mouse control:', err);
+      });
     }
 
-    // ── 2. Profile-driven Click Actions (Leading Edge) ──
-    if (currentAction !== prevAction) {
-      if (currentAction === 'left_click') {
-        if (now - lastClickTimesRef.current.left >= CLICK_COOLDOWN_MS) {
-          lastClickTimesRef.current.left = now;
-          window.electronAPI?.mouseClick('left');
-        }
-      } else if (currentAction === 'right_click') {
-        if (now - lastClickTimesRef.current.right >= CLICK_COOLDOWN_MS) {
-          lastClickTimesRef.current.right = now;
-          window.electronAPI?.mouseClick('right');
-        }
-      } else if (currentAction === 'middle_click') {
-        if (now - lastClickTimesRef.current.middle >= CLICK_COOLDOWN_MS) {
-          lastClickTimesRef.current.middle = now;
-          window.electronAPI?.mouseClick('middle');
-        }
+    // 2. Pinch Detection for Dragging
+    const pinching = isPinching(landmarks, calibration.pinchThreshold);
+    const DRAG_HOLD_MS = 300;
+
+    if (pinching) {
+      if (!wasPinchingRef.current) {
+        wasPinchingRef.current = true;
+        pinchStartTimeRef.current = now;
+      } else if (now - pinchStartTimeRef.current >= DRAG_HOLD_MS && !isDraggingRef.current) {
+        isDraggingRef.current = true;
+        window.electronAPI.mouseButton('left', 'down');
       }
+    } else {
+      if (isDraggingRef.current) {
+        window.electronAPI.mouseButton('left', 'up');
+        isDraggingRef.current = false;
+      }
+      wasPinchingRef.current = false;
+      pinchStartTimeRef.current = 0;
     }
 
-    // ── 3. Profile-driven Drag / Hold ──
-    if (currentAction === 'drag_hold' && !isProfileDraggingRef.current) {
-      isProfileDraggingRef.current = true;
-      window.electronAPI?.mouseButton('left', 'down');
-    } else if (currentAction !== 'drag_hold' && isProfileDraggingRef.current) {
-      isProfileDraggingRef.current = false;
-      window.electronAPI?.mouseButton('left', 'up');
-    }
+    // 3. Dynamic Gesture Action Execution from Profile
+    const mappedAction = profile.mappings[currentGestureLabel];
 
-    // ── Throttled continuous actions ──
-    if (now - lastEventTime.current < THROTTLE_MS) return;
-    lastEventTime.current = now;
-
-    // ── 4. Scrolling Actions ──
-    if (currentAction === 'scroll_up') {
-      if (now - lastScrollTimeRef.current >= SCROLL_INTERVAL_MS) {
-        lastScrollTimeRef.current = now;
-        window.electronAPI?.mouseScroll('up');
-      }
-    } else if (currentAction === 'scroll_down') {
-      if (now - lastScrollTimeRef.current >= SCROLL_INTERVAL_MS) {
-        lastScrollTimeRef.current = now;
-        window.electronAPI?.mouseScroll('down');
-      }
-    }
-
-    // ── 5. Zoom Actions ──
-    if (currentAction === 'zoom_in') {
-      if (now - lastZoomTimeRef.current >= ZOOM_INTERVAL_MS) {
-        lastZoomTimeRef.current = now;
-        window.electronAPI?.zoom('in');
-      }
-    } else if (currentAction === 'zoom_out') {
-      if (now - lastZoomTimeRef.current >= ZOOM_INTERVAL_MS) {
-        lastZoomTimeRef.current = now;
-        window.electronAPI?.zoom('out');
-      }
-    }
-
-    // ── 6. Mouse Move with Calibrated Workspace Mapping & Smoothing ──
-    const allowMove = (currentAction === 'pointer_move' || isProfileDraggingRef.current) && !isFrozen;
-    if (allowMove) {
-      const rawPointer = getMirroredIndexTipPosition(landmarks);
-      if (rawPointer) {
-        const calibrated = applyCalibrationMapping(rawPointer, calibrationRef.current);
-        const alpha = calibrationRef.current.smoothingAlpha;
-
-        if (!smoothedPosRef.current) {
-          smoothedPosRef.current = calibrated;
-        } else {
-          const dx = calibrated.x - smoothedPosRef.current.x;
-          const dy = calibrated.y - smoothedPosRef.current.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > calibrationRef.current.deadzoneRadius) {
-            smoothedPosRef.current = {
-              x: smoothedPosRef.current.x + alpha * dx,
-              y: smoothedPosRef.current.y + alpha * dy,
-            };
+    if (mappedAction && mappedAction !== 'none') {
+      switch (mappedAction) {
+        case 'left_click':
+          if (now - clickCooldownRef.current >= CLICK_COOLDOWN_MS) {
+            window.electronAPI.mouseClick('left');
+            clickCooldownRef.current = now;
           }
-        }
+          break;
 
-        const screenPoint = mapPointerToScreen(smoothedPosRef.current, screenSize);
-        window.electronAPI?.mouseMove(screenPoint.x, screenPoint.y);
+        case 'right_click':
+          if (now - clickCooldownRef.current >= CLICK_COOLDOWN_MS) {
+            window.electronAPI.mouseClick('right');
+            clickCooldownRef.current = now;
+          }
+          break;
+
+        case 'middle_click':
+          if (now - clickCooldownRef.current >= CLICK_COOLDOWN_MS) {
+            window.electronAPI.mouseClick('middle');
+            clickCooldownRef.current = now;
+          }
+          break;
+
+        case 'scroll_up':
+          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
+            window.electronAPI.mouseScroll('up');
+            lastScrollTime.current = now;
+          }
+          break;
+
+        case 'scroll_down':
+          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
+            window.electronAPI.mouseScroll('down');
+            lastScrollTime.current = now;
+          }
+          break;
+
+        case 'zoom_in':
+          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
+            window.electronAPI.zoom('in');
+            lastScrollTime.current = now;
+          }
+          break;
+
+        case 'zoom_out':
+          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
+            window.electronAPI.zoom('out');
+            lastScrollTime.current = now;
+          }
+          break;
+
+        default:
+          break;
       }
     }
-  }, [dominantHand, isMouseModeActive, currentGestureLabel, isFrozen, isElectron, screenSize]);
+  }, [dominantHand, isMouseModeActive, currentGestureLabel, isFrozen, calibration, profile]);
 }

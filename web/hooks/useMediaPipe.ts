@@ -275,9 +275,40 @@ export function useMediaPipe(
         setIsLoading(true);
         setError(null);
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 1280, height: 720, frameRate: 30 },
-        });
+        // In Electron desktop environment, ensure macOS system camera permission is requested and verified
+        if (typeof window !== 'undefined' && window.electronAPI?.requestMediaAccess) {
+          try {
+            const access = await window.electronAPI.requestMediaAccess();
+            if (!access.camera) {
+              const status = await window.electronAPI.getMediaStatus?.();
+              if (status?.camera === 'denied' || status?.camera === 'restricted') {
+                throw new Error(
+                  'Camera access is blocked by macOS. Please enable camera access for GestureBridge (or Terminal/Electron) in System Settings > Privacy & Security > Camera, then click Retry.'
+                );
+              }
+            }
+          } catch (accessErr) {
+            if (accessErr instanceof Error && accessErr.message.includes('System Settings')) {
+              throw accessErr;
+            }
+            console.warn('Desktop media access request warning:', accessErr);
+          }
+        }
+
+        // Request camera with ideal constraints, falling back to basic video if hardware constraints fail
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1280, min: 640 },
+              height: { ideal: 720, min: 480 },
+              frameRate: { ideal: 30, min: 15 },
+            },
+          });
+        } catch (constraintErr) {
+          console.warn('Failed with ideal camera constraints, trying standard fallback:', constraintErr);
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
 
         if (isCancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -374,7 +405,7 @@ export function useMediaPipe(
 
           canvasCtx.restore();
 
-          // Determine if we need to fire the callback (dedup per-hand)
+          // Check if hand configuration or landmarks changed significantly
           let changed = false;
 
           // Check if a hand was removed
@@ -461,7 +492,10 @@ export function useMediaPipe(
         let msg = 'MediaPipe initialization failed';
         if (err instanceof Error) {
           if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            msg = 'Camera permission was denied. Please allow camera access in your browser settings and click Retry.';
+            const isDesktop = typeof window !== 'undefined' && Boolean(window.electronAPI?.isElectron);
+            msg = isDesktop
+              ? 'Camera permission was denied. Please grant camera access to GestureBridge (or Terminal/Electron) in macOS System Settings > Privacy & Security > Camera, then click Retry.'
+              : 'Camera permission was denied. Please allow camera access in your browser settings and click Retry.';
           } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
             msg = 'No camera device was found. Please connect a webcam and click Retry.';
           } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
