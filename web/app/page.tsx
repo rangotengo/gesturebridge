@@ -27,7 +27,8 @@ import { saveCollectedSamples, trainDatasetModel } from '@/features/datasets/que
 import CalibrationModal from '@/components/CalibrationModal';
 import ProfileSelectorModal from '@/components/ProfileSelectorModal';
 import { getPinchDistance } from '@/hooks/usePinchDetector';
-
+import { loadCalibrationSettings, CalibrationSettings } from '@/lib/calibration';
+import { loadActiveProfile, GestureProfile, AVAILABLE_ACTIONS } from '@/lib/gestureProfiles';
 
 const LOG_THROTTLE_MS = 2000;
 
@@ -76,6 +77,31 @@ function HomePage(): React.ReactElement {
   const [activeMode, setActiveMode] = useState<ControlMode>('recognition');
   const [fogDensity, setFogDensity] = useState(0);
   const [blowNonce, setBlowNonce] = useState(0);
+
+  // Settings & Profile state
+  const [calibration, setCalibration] = useState<CalibrationSettings>(() => loadCalibrationSettings());
+  const [activeProfile, setActiveProfile] = useState<GestureProfile>(() => loadActiveProfile());
+
+  useEffect(() => {
+    const handleCalibrationUpdate = () => {
+      setCalibration(loadCalibrationSettings());
+    };
+    const handleProfileUpdate = () => {
+      setActiveProfile(loadActiveProfile());
+    };
+
+    window.addEventListener('gesturebridge:calibration-updated', handleCalibrationUpdate);
+    window.addEventListener('gesturebridge:profile-updated', handleProfileUpdate);
+    window.addEventListener('storage', handleCalibrationUpdate);
+    window.addEventListener('storage', handleProfileUpdate);
+
+    return () => {
+      window.removeEventListener('gesturebridge:calibration-updated', handleCalibrationUpdate);
+      window.removeEventListener('gesturebridge:profile-updated', handleProfileUpdate);
+      window.removeEventListener('storage', handleCalibrationUpdate);
+      window.removeEventListener('storage', handleProfileUpdate);
+    };
+  }, []);
 
   // Improve-AI panel state
   const [selectedImproveGesture, setSelectedImproveGesture] = useState('');
@@ -134,8 +160,11 @@ function HomePage(): React.ReactElement {
     });
   }, [isElectron, selectControlMode]);
 
-  // Identify dominant and modifier hands and get their predicted gesture index and wrist coordinate
-  const handRoles = assignHandRoles(hands.map((h) => h.handedness));
+  // Identify dominant and modifier hands honoring calibration preference
+  const handRoles = assignHandRoles(
+    hands.map((h) => h.handedness),
+    calibration.dominantHand
+  );
   const dominantHand = handRoles.dominantHand !== null ? hands[handRoles.dominantHand] : null;
   const modifierHand = handRoles.modifierHand !== null ? hands[handRoles.modifierHand] : null;
 
@@ -153,6 +182,13 @@ function HomePage(): React.ReactElement {
   const modifierGestureLabel = modifierPrediction && modifierPrediction.confidence > 0.6
     ? gestureLabels.indexOf(modifierPrediction.gesture)
     : -1;
+
+  // Active action mapped to dominant gesture under current profile
+  const dominantMappedActionType =
+    currentGestureLabel !== -1 ? activeProfile.mappings[currentGestureLabel] : undefined;
+  const dominantActionDef = dominantMappedActionType
+    ? AVAILABLE_ACTIONS.find((a) => a.type === dominantMappedActionType)
+    : undefined;
 
   const mouseHold = useModeToggle(
     currentGestureLabel,
@@ -297,12 +333,9 @@ function HomePage(): React.ReactElement {
     }
   }, [predict, isModelReady, isElectron, activeMode, emit, isAdmin]);
 
-
   /** Called by WebcamView once the first frame from MediaPipe arrives */
   const onFirstFrame = useCallback((): void => {
-    // Start fade-out
     setIsInitializing(false);
-    // Remove from DOM after transition completes
     setTimeout(() => setInitVisible(false), 600);
   }, []);
 
@@ -445,10 +478,10 @@ function HomePage(): React.ReactElement {
           isModeActive={mirrorHold.phase !== 'idle' ? isMirrorModeActive : isMouseModeActive}
         />
       )}
-      {/* ── Compact Square UI ── */}
+      {/* ── Compact Square UI (Mouse Control Mode) ── */}
       {isMouseModeActive && (
         <div
-          className="fixed inset-0 w-[220px] h-[220px] bg-slate-950/20 border border-white/15 rounded-2xl shadow-2xl flex flex-col items-center justify-between p-4 select-none overflow-hidden z-20"
+          className="fixed inset-0 w-[240px] h-[240px] bg-slate-950/20 border border-white/15 rounded-2xl shadow-2xl flex flex-col items-center justify-between p-3 select-none overflow-hidden z-20"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           {/* Zoom Overlay (rendered absolutely inside the container) */}
@@ -461,7 +494,7 @@ function HomePage(): React.ReactElement {
             </span>
           </div>
 
-          {/* Top Bar: Title & Drag Indicator */}
+          {/* Top Bar: Title & Drag / Freeze Indicators */}
           <div className="w-full flex items-center justify-between pointer-events-none">
             <span className="text-[10px] uppercase tracking-wider font-bold text-white/40">GestureBridge</span>
             <div className="flex gap-1 items-center">
@@ -478,23 +511,30 @@ function HomePage(): React.ReactElement {
             </div>
           </div>
 
-          {/* Bottom: current gesture names displayed live */}
+          {/* Center / Bottom: current gesture & mapped profile actions displayed live */}
           <div
             className="w-full flex flex-col gap-1.5 items-center font-extrabold text-xs tracking-tight text-white/95"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            {/* Dominant Hand Gesture */}
+            {/* Dominant Hand Gesture + Active Action */}
             {currentGestureLabel !== -1 && gestureLabels[currentGestureLabel] ? (
-              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-black border border-white/10 flex items-center gap-1 animate-fade-in whitespace-nowrap">
-                <span className="w-1.5 h-1.5 rounded-full bg-pink-500" />
-                {gestureLabels[currentGestureLabel] === 'Fist' && '✊ '}
-                {gestureLabels[currentGestureLabel] === 'Peace' && '✌️ '}
-                {gestureLabels[currentGestureLabel] === 'Pointing' && '👉 '}
-                {gestureLabels[currentGestureLabel] === 'Open Palm' && '🖐️ '}
-                {gestureLabels[currentGestureLabel] === 'Rock' && '🤘 '}
-                {gestureLabels[currentGestureLabel] === 'Thumb' && '👍 '}
-                {gestureLabels[currentGestureLabel]}
-              </span>
+              <div className="flex flex-col items-center gap-1">
+                <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-black border border-white/10 flex items-center gap-1 animate-fade-in whitespace-nowrap">
+                  <span className="w-1.5 h-1.5 rounded-full bg-pink-500" />
+                  {gestureLabels[currentGestureLabel] === 'Fist' && '✊ '}
+                  {gestureLabels[currentGestureLabel] === 'Peace' && '✌️ '}
+                  {gestureLabels[currentGestureLabel] === 'Pointing' && '👉 '}
+                  {gestureLabels[currentGestureLabel] === 'Open Palm' && '🖐️ '}
+                  {gestureLabels[currentGestureLabel] === 'Rock' && '🤘 '}
+                  {gestureLabels[currentGestureLabel] === 'Thumb' && '👍 '}
+                  {gestureLabels[currentGestureLabel]}
+                </span>
+                {dominantActionDef && dominantActionDef.type !== 'none' && (
+                  <span className="text-[9px] uppercase font-bold tracking-wider text-emerald-400 bg-emerald-950/60 border border-emerald-500/20 px-2 py-0.5 rounded-full shadow-sm">
+                    {dominantActionDef.label}
+                  </span>
+                )}
+              </div>
             ) : (
               <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-bold text-white/60 border border-white/5 uppercase tracking-wider">
                 No hand
@@ -503,7 +543,7 @@ function HomePage(): React.ReactElement {
 
             {/* Modifier Hand Gesture */}
             {modifierHand && modifierGestureLabel !== -1 && gestureLabels[modifierGestureLabel] ? (
-              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-black border border-white/10 flex items-center gap-1 shadow-lg whitespace-nowrap">
+              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-0.5 rounded-full text-[10px] font-black border border-white/10 flex items-center gap-1 shadow-lg whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
                 {gestureLabels[modifierGestureLabel] === 'Fist' && '✊ '}
                 {gestureLabels[modifierGestureLabel] === 'Peace' && '✌️ '}
@@ -542,9 +582,8 @@ function HomePage(): React.ReactElement {
         <>
           <GestureDisplay
             predictions={predictions}
-            isMouseModeActive={isMouseModeActive}
+            dominantHandName={dominantHand?.handedness ?? null}
             isElectron={isElectron}
-            gestureLabels={gestureLabels}
           />
           <ConfidenceBar predictions={predictions} />
 
@@ -795,18 +834,20 @@ function HomePage(): React.ReactElement {
         </div>
       )}
 
-      {/* ── Calibration & Profile Modals ── */}
-      <CalibrationModal
-        isOpen={isCalibrationOpen}
-        onClose={() => setIsCalibrationOpen(false)}
-        currentPinchDistance={dominantHand ? getPinchDistance(dominantHand.landmarks) : null}
-      />
-      <ProfileSelectorModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        currentRecognizedLabel={currentGestureLabel !== -1 ? currentGestureLabel : null}
-        gestureLabels={gestureLabels}
-      />
+      {/* ── Calibration & Profile Modals (Conditional Mounting for Fresh State) ── */}
+      {isCalibrationOpen && (
+        <CalibrationModal
+          onClose={() => setIsCalibrationOpen(false)}
+          currentPinchDistance={dominantHand ? getPinchDistance(dominantHand.landmarks) : null}
+        />
+      )}
+      {isProfileModalOpen && (
+        <ProfileSelectorModal
+          onClose={() => setIsProfileModalOpen(false)}
+          currentRecognizedLabel={currentGestureLabel !== -1 ? currentGestureLabel : null}
+          gestureLabels={gestureLabels}
+        />
+      )}
     </>
   );
 }

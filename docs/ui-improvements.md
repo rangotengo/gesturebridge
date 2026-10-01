@@ -36,21 +36,19 @@ This document outlines the UI issues and improvements identified across GestureB
      - Protected `/ml/evaluation` with `<ProtectedRoute requireAdmin>`.
      - Replaced duplicate `/admin/evaluation` route with Next.js redirect to `/ml/evaluation`.
 
-5. **Modals Are Not Accessible Dialogs** — `[COMPLETED]`
-   - **Files:** `web/components/CalibrationModal.tsx`, `web/components/ProfileSelectorModal.tsx`
-   - **Problem:** Modals lacked Escape key dismissal, backdrop click dismissal, accessible dialog roles/labels, tab accessibility, and the navbar (`z-index: 100`) sat above modal backdrop (`z-50`).
+5. **Modals Are Real Accessible Dialogs & Focus Trapping** — `[COMPLETED]`
+   - **Files:** `web/components/CalibrationModal.tsx`, `web/components/ProfileSelectorModal.tsx`, `web/app/page.tsx`
+   - **Problem:** Modals lacked Escape key dismissal, backdrop click dismissal, accessible dialog roles/labels, tab accessibility, focus stayed on background triggers and could tab outside, and the navbar (`z-index: 100`) sat above modal backdrop (`z-50`).
    - **Fix Applied:**
-     - Raised modal backdrops to `z-[110]`.
-     - Added `Escape` key event listener and backdrop click handlers.
-     - Added `role="dialog"`, `aria-modal="true"`, `aria-labelledby`, and `aria-label` close button attributes.
-     - Added accessible tab roles (`role="tablist"`, `role="tab"`, `role="tabpanel"`).
+     - Replaced custom div overlays with native `<dialog ref={dialogRef}>` opened via `showModal()`, automatically trapping focus inside the modal and placing it in top-layer above the navbar.
+     - Added `onCancel` (for Escape) and backdrop click dismissal.
+     - Rendered modals conditionally (`{isCalibrationOpen && <CalibrationModal ... />}`) so they mount fresh every time without stale state or `set-state-in-effect` lint issues.
 
 6. **Modal Cancel Doesn't Discard Changes** — `[COMPLETED]`
-   - **Files:** `web/components/CalibrationModal.tsx`, `web/components/ProfileSelectorModal.tsx`
+   - **Files:** `web/components/CalibrationModal.tsx`, `web/components/ProfileSelectorModal.tsx`, `web/app/page.tsx`
    - **Problem:** Modals kept dirty editing state upon clicking Cancel; reopening showed abandoned changes.
    - **Fix Applied:**
-     - Re-sync internal editing state to saved local/storage configuration on open (`useEffect` on `isOpen`).
-     - Reset state back to loaded configuration on Cancel before closing.
+     - Modal state initializes fresh on mount from storage. Unmounting on Cancel naturally discards uncommitted state.
 
 7. **Space Key Captures Pose While Typing Gesture Name** — `[COMPLETED]`
    - **Files:** `web/app/page.tsx`
@@ -58,36 +56,43 @@ This document outlines the UI issues and improvements identified across GestureB
    - **Fix Applied:**
      - Added focus guard in `handleKeyDown` to ignore Space events when active element is `INPUT`, `TEXTAREA`, `SELECT`, or `isContentEditable`.
 
-8. **Hardcoded Dominant Hand and Action Labels in Gesture Display** — `[COMPLETED]`
-   - **Files:** `web/components/GestureDisplay.tsx`, `web/components/ProfileSelectorModal.tsx`, `web/app/page.tsx`
-   - **Problem:** Right hand hardcoded as dominant, action labels only matched default profile, custom gestures could not be mapped, and mode toggle showed "5s Hold" in web browsers.
+8. **Dominant Hand & Profile-Action Synchronization** — `[COMPLETED]`
+   - **Files:** `web/hooks/useHandRoles.ts`, `web/components/GestureDisplay.tsx`, `web/app/page.tsx`
+   - **Problem:** Cursor movement previously ignored the left/right hand calibration setting, causing "Dominant (Left)" on-screen while the right hand moved the cursor. Profile-based action labels were also placed in dead code inside `GestureDisplay` which is hidden in mouse mode.
    - **Fix Applied:**
-     - Connected `GestureDisplay` dynamically to dominant hand preference (`dominantHand`) from `loadCalibrationSettings()`.
-     - Dynamically mapped gesture actions from active profile (`loadActiveProfile()`) and listened to custom update events (`gesturebridge:calibration-updated`, `gesturebridge:profile-updated`, and `storage`).
-     - Passed `isElectron` prop and hid "Mode Toggle (5s Hold)" in web browser mode.
-     - Passed dynamic `gestureLabels` to `ProfileSelectorModal` so custom gestures can be mapped.
+     - Updated `assignHandRoles` to accept `preferredDominantHand: 'Left' | 'Right' | 'Auto'`, honoring calibration preference when multiple hands are in view.
+     - Connected `GestureDisplay` directly to the resulting dominant hand (`dominantHandName`), ensuring 100% synchronization between cursor tracking and on-screen dominant/modifier indicators.
+     - Displayed the active profile's mapped action labels in the compact square mouse-mode panel directly beneath detected gestures.
+
+---
+
+## Addressed Along the Way
+
+- **Dark `color-scheme` Defined:** Explicitly specified in `globals.css` to prevent white flash during theme rendering and style native form controls/scrollbars.
+- **Accessible Camera Toggle Name:** Provided `title`, `aria-label`, and `aria-pressed` states on the camera toggle button.
+- **Evaluation Dashboard Empty State:** Rendered clean empty state with CTA to evaluate models when no previous evaluation runs exist.
 
 ---
 
 ## P1: User Flow & Experience
 
 9. **Camera-Denied / Error State**
-   - **Problem:** Tiny banner over black screen.
+   - **Problem:** Tiny banner over black screen when camera is rejected.
    - **Fix:** Centered friendly state with clear icons, distinct copy for "denied", "not found", and "in use", step-by-step unblocking guide, and large Retry button.
 
 10. **First-Run Onboarding Guidance**
     - **Problem:** Direct launch into camera with no explanation of 6 gestures, hand roles, or modes.
     - **Fix:** Dismissible "How it works" onboarding card, plus a quick `?` cheat sheet overlay displaying gestures and actions under the active profile.
 
-11. **Colliding Floating Overlays**
-    - **Problem:** Fragmented absolute positioning (`bottom-24`, `bottom-14`, `bottom-0`, `top-16`, `top-20`) colliding on mobile screens.
+11. **Colliding Floating Overlays on Small Screens**
+    - **Problem:** Fragmented absolute positioning (`bottom-24`, `bottom-14`, `bottom-0`, `top-16`, `top-20`) colliding on mobile viewports.
     - **Fix:** Coordinated layout: status & mode switcher top bar, gesture info cards mid-screen with responsive bounds, and unified bottom toolbar.
 
 12. **Informative Startup Progress**
-    - **Problem:** Vague "Initializing camera..." text.
+    - **Problem:** Vague "Initializing camera..." text during multi-step setup.
     - **Fix:** Multi-step status feedback (loading ML model -> requesting camera -> starting hand tracking) and a timeout hint (>10s) with troubleshooting steps.
 
-13. **Mode Switcher Context & Emergency Stop**
+13. **Mode Switcher Context & Emergency Stop Guidance**
     - **Problem:** Detect / Mouse / Mirror modes lack descriptions; Mouse mode hijacking system cursor is jarring without exit instructions.
     - **Fix:** Tooltips/descriptions explaining modes and prominent display of emergency-stop shortcut when entering Mouse mode.
 
@@ -110,59 +115,85 @@ This document outlines the UI issues and improvements identified across GestureB
 
 ---
 
-## P2: Visual Consistency
+## P2: Visual Consistency & Interaction Details
 
-19. **Fragmented Color Schemes**
-    - **Fix:** Standardize across dark-mode palette using Tailwind slate scale and consistent primary accents.
+19. **History Page Visual & Functional Flaws**
+    - **Files:** `web/app/ml/history/page.tsx`
+    - **Problem:** Table columns misaligned without minimum cell widths, timestamps unformatted/unlocalized, no pagination or scroll bounds for large datasets, "Live feed will pause" copy shown even when camera stream remains running, and no bulk delete/clear actions.
+    - **Fix:**
+      - Fix table alignment with consistent padding (`px-4 py-3`), fixed cell widths for status/confidence badges, and localized datetime strings (`toLocaleString()`).
+      - Add pagination or virtualized list for history logs.
+      - Align "Live feed will pause" banner to reflect actual camera lifecycle or pause camera while on history page.
+      - Add clear history / export CSV action.
 
-20. **Typography and Font Sizes**
-    - **Fix:** Establish consistent scale (`text-xs` for tags/labels, `text-sm` for body/descriptions, `text-lg`/`text-xl` for card titles, `text-2xl` for page headers).
+20. **Evaluation Dashboard Follow-Ups**
+    - **Files:** `web/app/ml/evaluation/page.tsx`
+    - **Problem:** Confusion matrix labels cramped on smaller viewports, class distribution chart lacks interactive tooltips, no mechanism to compare two evaluation runs side-by-side, and re-evaluating requires manual page reload.
+    - **Fix:**
+      - Add responsive scrolling / heat-map color scale for confusion matrix cells.
+      - Add comparison diff view between latest run and previous run.
+      - Add re-evaluate button that triggers evaluation and updates live metrics without full page refresh.
 
-21. **Card and Container Styling**
-    - **Fix:** Unify border radius (`rounded-xl` / `rounded-2xl`), border colors (`border-slate-800`), and dark card backgrounds (`bg-slate-900/80`).
+21. **Authentication Flow Edge Cases**
+    - **Files:** `web/app/admin/logout/page.tsx`, `web/app/admin/signup/page.tsx`
+    - **Problem:**
+      - In `/admin/logout`, if `fetch('/api/admin/logout')` errors or network drops, the spinner hangs indefinitely without a timeout or fallback redirect.
+      - In `/admin/signup`, form validation runs only on submit; passwords mismatched or too short give no inline feedback while typing.
+    - **Fix:**
+      - In logout page, add a 3-second timeout fallback that forcibly clears client session tokens and redirects to `/admin/login`.
+      - In signup page, add instant inline validation (password length indicator, match confirmation banner) on input change/blur.
 
-22. **Interactive State Feedback**
-    - **Fix:** Standardize button hover/active/focus-visible rings and transitions.
+22. **Unused CSS & Dual Styling Systems**
+    - **Files:** `web/app/globals.css`
+    - **Problem:** The app mixes modern Tailwind utility classes with older custom hand-written BEM-like CSS rules (`.history-table`, `.collector-box`, `.improve-panel`, `.mode-card`), with duplicate properties and dead rules left over from past refactors.
+    - **Fix:**
+      - Audit and remove dead CSS classes from `globals.css`.
+      - Migrate custom panel and table styling to Tailwind utilities and component classes for design consistency.
 
-23. **Table & List Presentation**
-    - **Fix:** Align table cell paddings, typography, zebra striping, and empty states.
+23. **Duplicated Gesture Data & Sources of Truth**
+    - **Files:** `web/ml/gestureUtils.ts`, `web/lib/gestureProfiles.ts`, `web/components/GestureDisplay.tsx`, `web/components/ProfileSelectorModal.tsx`, `web/app/page.tsx`
+    - **Problem:** Gesture names (`'Pointing (Index Out)'`), default labels, and gesture icons (`👉`, `✊`, `✌️`, `🖐️`, `🤘`, `👍`) are declared independently in 4+ files.
+    - **Fix:** Centralize standard gesture metadata (index, id, label, description, icon) in `web/ml/gestureUtils.ts` (or a dedicated `web/features/gestures/registry.ts`) and import it everywhere.
 
-24. **Loading States and Spinners**
-    - **Fix:** Standardize spinners and skeleton loaders across all pages.
-
-25. **Toast and Notification Consistency**
-    - **Fix:** Consistent positioning, durations, colors, and dismissal across notifications.
+24. **Navbar Issues & Mobile Navigation**
+    - **Files:** `web/components/Navbar.tsx`
+    - **Problem:** Missing clear active route indicator on current page links, mobile hamburger menu doesn't smoothly animate or trap focus, and admin navigation links aren't clearly grouped.
+    - **Fix:**
+      - Add active state highlighting (`bg-slate-800 text-white font-semibold`) using `usePathname()`.
+      - Add accessible mobile drawer/dropdown with Escape and outside-click dismissal.
+      - Group Admin ML links into a dedicated "Admin" dropdown or section.
 
 ---
 
 ## P3: Accessibility & Polish
 
-26. **Contrast & Color-Only Information**
-    - **Fix:** Ensure WCAG AA contrast ratio (4.5:1) for all text and add shape/text indicators alongside color cues.
+25. **Missing `<main>` Landmark & Skip Link**
+    - **Files:** `web/app/layout.tsx`, all route pages
+    - **Problem:** Pages lack a semantic `<main id="main-content">` landmark, and keyboard users have to tab through the entire navigation bar on every page.
+    - **Fix:**
+      - Add a visually hidden, focusable skip link (`<a href="#main-content" className="sr-only focus:not-sr-only ...">Skip to content</a>`) at the top of `layout.tsx`.
+      - Wrap core page content in `<main id="main-content">`.
 
-27. **Keyboard Navigation & Focus Management**
-    - **Fix:** Trap focus in open modals, restore focus on close, and support Tab navigation throughout.
+26. **Unloaded Inter Font & Typography Consistency**
+    - **Files:** `web/app/layout.tsx`, `web/app/globals.css`
+    - **Problem:** The CSS references `Inter, sans-serif` but the font is not bundled locally or configured via `next/font/google`, causing system fallback shifts and missing weights in offline/Electron environments.
+    - **Fix:** Configure `next/font/google` with `Inter` and `variable: '--font-sans'`, or load bundled WOFF2 fonts for offline desktop reliability.
 
-28. **Screen Reader Live Regions**
-    - **Fix:** Audit `aria-live` regions to prevent verbose or interrupting announcements.
+27. **Wording & Terminology Inconsistencies**
+    - **Problem:** Terms are mixed across pages: "Train AI" vs "Improve AI", "Mouse Control" vs "Mouse Mode", "Single-Hand" vs "Accessibility Profile".
+    - **Fix:** Standardize terminology across UI copy, tooltips, and documentation.
 
-29. **Reduced Motion Preferences**
-    - **Fix:** Honor `prefers-reduced-motion` across pulse, ping, and fade animations.
+28. **Color Contrast & Shape Cues**
+    - **Fix:** Ensure WCAG AA contrast ratio (4.5:1) for muted text (`text-slate-400`/`text-slate-500` on dark backgrounds) and add shape/text badges alongside colored dots so color-blind users can distinguish statuses.
 
-30. **Mobile Viewport & Touch Optimization**
-    - **Fix:** Ensure touch target size >= 44x44px and responsive layouts on small screens.
+29. **Screen Reader Live Regions**
+    - **Fix:** Audit `aria-live="polite"` regions to prevent rapid spam during high-frequency gesture detection frames (throttle live announcements to meaningful status changes).
 
-31. **Form Labels & Error Associations**
-    - **Fix:** Link form inputs to `<label>` tags with `htmlFor` and error messages via `aria-describedby`.
+30. **Reduced Motion Preferences**
+    - **Fix:** Wrap high-frequency or infinite animations (pulse rings, progress bars, radar sweeps) in `@media (prefers-reduced-motion: reduce)`.
 
-32. **Helpful Empty States**
-    - **Fix:** Ensure all zero-data states provide educational context and a call to action.
+31. **Touch Target Size**
+    - **Fix:** Ensure all interactive elements on mobile viewports have minimum touch bounding boxes of 44x44px.
 
-33. **Consistent Iconography**
-    - **Fix:** Replace mixed emojis with consistent SVG icons throughout action triggers.
-
-34. **Tooltips & Discoverability**
-    - **Fix:** Add accessible tooltips for icon-only buttons and badge indicators.
-
-35. **Favicon and Page Metadata**
-    - **Fix:** Add app favicon, OpenGraph tags, and page-specific `<title>` tags across routes.
+32. **Favicon and Page Metadata**
+    - **Fix:** Add app favicon, Web App Manifest, OpenGraph tags, and page-specific `<title>` tags across routes.

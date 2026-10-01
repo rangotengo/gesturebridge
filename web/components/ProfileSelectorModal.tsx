@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   GestureProfile,
   PRESET_PROFILES,
@@ -21,54 +21,39 @@ const GESTURE_NAMES: Record<number, string> = {
 };
 
 interface ProfileSelectorModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   currentRecognizedLabel?: number | null;
   gestureLabels?: string[];
 }
 
 export default function ProfileSelectorModal({
-  isOpen,
+  isOpen = true,
   onClose,
   currentRecognizedLabel = null,
   gestureLabels,
 }: ProfileSelectorModalProps): React.JSX.Element | null {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>(() => loadActiveProfile().id);
   const [customMappings, setCustomMappings] = useState<Record<number, GestureActionType>>(() => ({
     ...loadActiveProfile().mappings,
   }));
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
-  // Sync state whenever modal opens
   useEffect(() => {
-    if (isOpen) {
-      const active = loadActiveProfile();
-      setSelectedPresetId(active.id);
-      setCustomMappings({ ...active.mappings });
-      setFeedbackMessage(null);
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (dialog.showModal && !dialog.open) {
+      dialog.showModal();
     }
-  }, [isOpen]);
 
-  const handleCancel = useCallback(() => {
-    const active = loadActiveProfile();
-    setSelectedPresetId(active.id);
-    setCustomMappings({ ...active.mappings });
-    setFeedbackMessage(null);
-    onClose();
-  }, [onClose]);
-
-  // Handle Escape key dismissal
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        handleCancel();
+    return () => {
+      if (dialog.close && dialog.open) {
+        dialog.close();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, handleCancel]);
+  }, []);
 
   const validationWarnings = useMemo(() => {
     return validateProfileMappings(customMappings).warnings;
@@ -88,12 +73,6 @@ export default function ProfileSelectorModal({
   }, [gestureLabels]);
 
   if (!isOpen) return null;
-
-  const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) {
-      handleCancel();
-    }
-  };
 
   const handleSelectPreset = (presetId: string) => {
     setSelectedPresetId(presetId);
@@ -133,14 +112,21 @@ export default function ProfileSelectorModal({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
+    <dialog
+      ref={dialogRef}
       aria-labelledby="profile-selector-title"
-      onClick={handleBackdropClick}
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in"
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === dialogRef.current) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 m-auto bg-transparent p-0 border-none outline-none max-w-none max-h-none w-full h-full flex items-center justify-center backdrop:bg-black/70 backdrop:backdrop-blur-sm z-[110]"
     >
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-fade-in mx-4">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/80">
           <div>
@@ -154,7 +140,7 @@ export default function ProfileSelectorModal({
           </div>
           <button
             type="button"
-            onClick={handleCancel}
+            onClick={onClose}
             aria-label="Close profile selector dialog"
             className="text-slate-400 hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-800 transition"
           >
@@ -251,37 +237,37 @@ export default function ProfileSelectorModal({
               );
             })}
           </div>
-
-          {feedbackMessage && (
-            <div className="p-3 bg-emerald-950/50 border border-emerald-500/40 rounded-xl text-emerald-300 text-xs text-center animate-fade-in">
-              ✓ {feedbackMessage}
-            </div>
-          )}
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-3.5 border-t border-slate-800 bg-slate-900 flex items-center justify-between">
-          <div className="text-xs text-slate-400">
-            Selected: <span className="text-slate-200 font-semibold">{selectedPresetId}</span>
+        {feedbackMessage && (
+          <div className="mx-6 mb-2 alert alert-info text-xs py-2 px-3 animate-fade-in" role="status">
+            {feedbackMessage}
           </div>
+        )}
+
+        {/* Footer */}
+        <div className="px-6 py-4 bg-slate-950/60 border-t border-slate-800 flex items-center justify-between">
+          <p className="text-xs text-slate-400">
+            Changes will take effect immediately upon saving.
+          </p>
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={handleCancel}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
+              onClick={onClose}
+              className="btn btn-ghost px-4 py-2 text-xs text-slate-300 hover:bg-slate-800 rounded-lg"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={handleApply}
-              className="px-5 py-2 rounded-xl text-xs font-semibold bg-indigo-500 hover:bg-indigo-400 text-white shadow-md shadow-indigo-500/20 transition"
+              className="btn btn-primary px-4 py-2 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg shadow-md"
             >
               Apply Profile
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

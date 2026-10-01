@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   CalibrationSettings,
   loadCalibrationSettings,
@@ -9,54 +9,37 @@ import {
 } from '@/lib/calibration';
 
 interface CalibrationModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   currentPinchDistance?: number | null;
 }
 
 export default function CalibrationModal({
-  isOpen,
+  isOpen = true,
   onClose,
   currentPinchDistance = null,
 }: CalibrationModalProps): React.JSX.Element | null {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [settings, setSettings] = useState<CalibrationSettings>(() => loadCalibrationSettings());
   const [activeTab, setActiveTab] = useState<'hand' | 'workspace' | 'sensitivity' | 'pinch'>('hand');
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
 
-  // Sync settings when modal opens
   useEffect(() => {
-    if (isOpen) {
-      setSettings(loadCalibrationSettings());
-      setSaveFeedback(null);
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (dialog.showModal && !dialog.open) {
+      dialog.showModal();
     }
-  }, [isOpen]);
 
-  const handleCancel = useCallback(() => {
-    setSettings(loadCalibrationSettings());
-    setSaveFeedback(null);
-    onClose();
-  }, [onClose]);
-
-  // Handle Escape key dismissal
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        handleCancel();
+    return () => {
+      if (dialog.close && dialog.open) {
+        dialog.close();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, handleCancel]);
+  }, []);
 
   if (!isOpen) return null;
-
-  const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) {
-      handleCancel();
-    }
-  };
 
   const handleSave = () => {
     saveCalibrationSettings(settings);
@@ -75,20 +58,27 @@ export default function CalibrationModal({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
+    <dialog
+      ref={dialogRef}
       aria-labelledby="calibration-modal-title"
-      onClick={handleBackdropClick}
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in"
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === dialogRef.current) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 m-auto bg-transparent p-0 border-none outline-none max-w-none max-h-none w-full h-full flex items-center justify-center backdrop:bg-black/70 backdrop:backdrop-blur-sm z-[110]"
     >
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-fade-in mx-4">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/80">
           <div>
             <h2 id="calibration-modal-title" className="text-xl font-bold text-slate-100 flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
-              Webcam & Pointer Calibration
+              Webcam &amp; Pointer Calibration
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
               Customize tracking bounds, sensitivity, and pinch click thresholds for your environment.
@@ -96,7 +86,7 @@ export default function CalibrationModal({
           </div>
           <button
             type="button"
-            onClick={handleCancel}
+            onClick={onClose}
             aria-label="Close calibration dialog"
             className="text-slate-400 hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-800 transition"
           >
@@ -118,9 +108,9 @@ export default function CalibrationModal({
               role="tab"
               aria-selected={activeTab === tab.id}
               aria-controls={`calibration-panel-${tab.id}`}
-              type="button"
+              tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => setActiveTab(tab.id as typeof activeTab)}
-              className={`pb-2.5 px-3 font-medium transition border-b-2 ${
+              className={`pb-2.5 px-3 font-semibold transition border-b-2 -mb-px ${
                 activeTab === tab.id
                   ? 'border-cyan-400 text-cyan-300'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -131,15 +121,11 @@ export default function CalibrationModal({
           ))}
         </div>
 
-        {/* Tab Body */}
-        <div
-          role="tabpanel"
-          id={`calibration-panel-${activeTab}`}
-          aria-labelledby={`calibration-tab-${activeTab}`}
-          className="p-6 overflow-y-auto space-y-6 flex-1 text-sm text-slate-300"
-        >
+        {/* Tab Content Body */}
+        <div className="p-6 overflow-y-auto space-y-6 flex-1 text-slate-200 text-sm">
+          {/* Tab 1: Hand Preference */}
           {activeTab === 'hand' && (
-            <div className="space-y-4">
+            <div id="calibration-panel-hand" role="tabpanel" aria-labelledby="calibration-tab-hand" className="space-y-4">
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 Select Dominant Hand for Pointer Movement
               </label>
@@ -169,14 +155,15 @@ export default function CalibrationModal({
             </div>
           )}
 
+          {/* Tab 2: Active Workspace Area */}
           {activeTab === 'workspace' && (
-            <div className="space-y-4">
+            <div id="calibration-panel-workspace" role="tabpanel" aria-labelledby="calibration-tab-workspace" className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
                   Active Screen Area Bounding Box
                 </label>
                 <p className="text-xs text-slate-400">
-                  Constrains the natural range of motion so you don't need to stretch across the whole camera frame.
+                  Constrains the natural range of motion so you don&apos;t need to stretch across the whole camera frame.
                 </p>
               </div>
 
@@ -240,11 +227,12 @@ export default function CalibrationModal({
             </div>
           )}
 
+          {/* Tab 3: Sensitivity & Smoothing */}
           {activeTab === 'sensitivity' && (
-            <div className="space-y-4">
+            <div id="calibration-panel-sensitivity" role="tabpanel" aria-labelledby="calibration-tab-sensitivity" className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                  Cursor Speed & Smoothing
+                  Cursor Speed &amp; Smoothing
                 </label>
                 <p className="text-xs text-slate-400">
                   Higher sensitivity speeds up the pointer; higher smoothing dampens natural hand tremor.
@@ -309,8 +297,9 @@ export default function CalibrationModal({
             </div>
           )}
 
+          {/* Tab 4: Pinch Click Calibration */}
           {activeTab === 'pinch' && (
-            <div className="space-y-4">
+            <div id="calibration-panel-pinch" role="tabpanel" aria-labelledby="calibration-tab-pinch" className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
                   Pinch Click Threshold
@@ -342,7 +331,7 @@ export default function CalibrationModal({
                   <div className="flex justify-between items-center text-xs text-slate-400 mb-1.5">
                     <span>Live Fingertip Distance:</span>
                     <span className="font-mono">
-                      {currentPinchDistance !== null
+                      {currentPinchDistance !== null && currentPinchDistance !== undefined
                         ? currentPinchDistance.toFixed(3)
                         : 'No hand detected'}
                     </span>
@@ -371,7 +360,7 @@ export default function CalibrationModal({
           )}
 
           {saveFeedback && (
-            <div className="p-3 bg-emerald-950/50 border border-emerald-500/40 rounded-xl text-emerald-300 text-xs text-center animate-fade-in">
+            <div className="p-3 bg-emerald-950/50 border border-emerald-500/40 rounded-xl text-emerald-300 text-xs text-center animate-fade-in" role="status">
               ✓ {saveFeedback}
             </div>
           )}
@@ -389,7 +378,7 @@ export default function CalibrationModal({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={handleCancel}
+              onClick={onClose}
               className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
             >
               Cancel
@@ -404,6 +393,6 @@ export default function CalibrationModal({
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

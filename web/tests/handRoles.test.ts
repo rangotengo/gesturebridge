@@ -11,9 +11,14 @@ describe('assignHandRoles', () => {
     expect(assignHandRoles([hand])).toEqual({ dominantHand: 0, modifierHand: null });
   });
 
-  it('uses already mirror-corrected user-perspective handedness', () => {
+  it('uses already mirror-corrected user-perspective handedness with default right-dominant', () => {
     expect(assignHandRoles(['Left', 'Right'])).toEqual({ dominantHand: 1, modifierHand: 0 });
     expect(assignHandRoles(['Right', 'Left'])).toEqual({ dominantHand: 0, modifierHand: 1 });
+  });
+
+  it('honors preferredDominantHand when set to Left', () => {
+    expect(assignHandRoles(['Left', 'Right'], 'Left')).toEqual({ dominantHand: 0, modifierHand: 1 });
+    expect(assignHandRoles(['Right', 'Left'], 'Left')).toEqual({ dominantHand: 1, modifierHand: 0 });
   });
 
   it('falls back to one dominant hand when both labels are Left', () => {
