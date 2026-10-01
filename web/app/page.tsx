@@ -24,6 +24,9 @@ import { useFacePucker } from '@/hooks/useFacePucker';
 import type { ControlMode } from '@/features/control/modes';
 import { mapRawLandmarkToMirroredCoverViewport } from '@/features/control/pointerTracking';
 import { saveCollectedSamples, trainDatasetModel } from '@/features/datasets/queries';
+import CalibrationModal from '@/components/CalibrationModal';
+import ProfileSelectorModal from '@/components/ProfileSelectorModal';
+import { getPinchDistance } from '@/hooks/usePinchDetector';
 
 
 const LOG_THROTTLE_MS = 2000;
@@ -67,6 +70,8 @@ function HomePage(): React.ReactElement {
   const [isInitializing, setIsInitializing] = useState(true);
   const [initVisible, setInitVisible] = useState(true);   // controls fade-out
   const [isImproveOpen, setIsImproveOpen] = useState(false);
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [predictions, setPredictions] = useState<HandPrediction[]>([]);
   const [activeMode, setActiveMode] = useState<ControlMode>('recognition');
   const [fogDensity, setFogDensity] = useState(0);
@@ -301,7 +306,15 @@ function HomePage(): React.ReactElement {
     setTimeout(() => setInitVisible(false), 600);
   }, []);
 
-  // ── Capture / upload / train helpers ──────────────────────
+  /** Dismiss loading overlay if camera fails to initialize so error is visible */
+  const onCameraError = useCallback((error: string | null): void => {
+    if (error) {
+      setIsInitializing(false);
+      setInitVisible(false);
+    }
+  }, []);
+
+  // ── Capture / upload / train helpers ───────────────────────
   const capturedCounts = gestureLabels.reduce<Record<string, number>>((acc, label) => {
     const labelIndex = gestureLabels.indexOf(label);
     const count = capturedSamples.filter((s) => s.label === labelIndex).length;
@@ -327,6 +340,16 @@ function HomePage(): React.ReactElement {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.code === 'Space' && isImproveOpen) {
+        const activeEl = document.activeElement as HTMLElement | null;
+        if (
+          activeEl &&
+          (activeEl.tagName === 'INPUT' ||
+            activeEl.tagName === 'TEXTAREA' ||
+            activeEl.tagName === 'SELECT' ||
+            activeEl.isContentEditable)
+        ) {
+          return;
+        }
         e.preventDefault();
         handleCapturePose();
       }
@@ -393,6 +416,7 @@ function HomePage(): React.ReactElement {
       <WebcamView
         onLandmarksUpdate={onLandmarksUpdate}
         onFirstFrame={onFirstFrame}
+        onError={onCameraError}
         isActive={isCameraOn}
         isCompact={isMouseModeActive}
         videoElementRef={cameraVideoRef}
@@ -437,21 +461,22 @@ function HomePage(): React.ReactElement {
             </span>
           </div>
 
-          {/* Top: pulsing dot / freeze status / drag status */}
-          <div
-            className="flex flex-col items-center gap-1.5 w-full"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          >
-            <div className="flex items-center gap-1.5 bg-slate-950/80 backdrop-blur-md border border-white/10 px-2.5 py-0.5 rounded-full">
-              <span className={`w-1.5 h-1.5 rounded-full ${isFrozen ? 'bg-cyan-400 animate-ping' : 'bg-emerald-500 animate-pulse'} border border-emerald-400`} />
-              <span className="text-[10px] font-black uppercase tracking-wider text-white">
-                {isFrozen ? '❄️ Frozen 🔒' : isDragging ? '✊ Dragging ↖↗↙↘' : 'Mouse Active'}
-              </span>
+          {/* Top Bar: Title & Drag Indicator */}
+          <div className="w-full flex items-center justify-between pointer-events-none">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-white/40">GestureBridge</span>
+            <div className="flex gap-1 items-center">
+              {isDragging && (
+                <span className="text-[9px] uppercase font-black tracking-widest text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 px-1.5 py-0.5 rounded">
+                  Drag
+                </span>
+              )}
+              {isFrozen && (
+                <span className="text-[9px] uppercase font-black tracking-widest text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-1.5 py-0.5 rounded">
+                  Frozen
+                </span>
+              )}
             </div>
           </div>
-
-          {/* Center: Empty space to let webcam view shine through */}
-          <div className="flex-1" />
 
           {/* Bottom: current gesture names displayed live */}
           <div
@@ -460,7 +485,7 @@ function HomePage(): React.ReactElement {
           >
             {/* Dominant Hand Gesture */}
             {currentGestureLabel !== -1 && gestureLabels[currentGestureLabel] ? (
-              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-black border border-white/10 flex items-center gap-1 animate-in fade-in zoom-in-95 whitespace-nowrap">
+              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-black border border-white/10 flex items-center gap-1 animate-fade-in whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-pink-500" />
                 {gestureLabels[currentGestureLabel] === 'Fist' && '✊ '}
                 {gestureLabels[currentGestureLabel] === 'Peace' && '✌️ '}
@@ -515,7 +540,12 @@ function HomePage(): React.ReactElement {
       {/* ── Overlays (z-30+) ── */}
       {!isMouseModeActive && (
         <>
-          <GestureDisplay predictions={predictions} isMouseModeActive={isMouseModeActive} />
+          <GestureDisplay
+            predictions={predictions}
+            isMouseModeActive={isMouseModeActive}
+            isElectron={isElectron}
+            gestureLabels={gestureLabels}
+          />
           <ConfidenceBar predictions={predictions} />
 
           {/* Mode toggle — Electron only (mouse control is desktop-only) */}
@@ -526,16 +556,61 @@ function HomePage(): React.ReactElement {
             />
           )}
 
-          {/* ── Camera toggle button (fixed bottom-right) ── */}
-          <button
-            id="camera-toggle-btn"
-            onClick={handleCameraToggle}
-            title={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
-            className="btn btn-ghost fixed bottom-14 right-4 z-40 !p-0 w-10 h-10 flex items-center justify-center"
-            aria-pressed={isCameraOn}
-          >
-            {isCameraOn ? <CameraOnIcon /> : <CameraOffIcon />}
-          </button>
+          {/* ── Unified Bottom Toolbar (fixed bottom-14 inset-x-0) ── */}
+          <div className="fixed bottom-14 inset-x-0 z-40 px-4 pointer-events-none">
+            <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 pointer-events-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsCalibrationOpen(true)}
+                  title="Calibrate Webcam & Pointer"
+                  aria-label="Calibrate Webcam & Pointer"
+                  className="btn btn-ghost px-3 py-1.5 h-10 text-xs font-semibold flex items-center gap-1.5 bg-slate-900/80 backdrop-blur border border-white/10 text-slate-200 hover:bg-slate-800 rounded-xl shadow-lg"
+                >
+                  <span>⚙️</span>
+                  <span>Calibrate</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsProfileModalOpen(true)}
+                  title="Configure Gesture Profiles"
+                  aria-label="Configure Gesture Profiles"
+                  className="btn btn-ghost px-3 py-1.5 h-10 text-xs font-semibold flex items-center gap-1.5 bg-slate-900/80 backdrop-blur border border-white/10 text-slate-200 hover:bg-slate-800 rounded-xl shadow-lg"
+                >
+                  <span>🎯</span>
+                  <span>Profiles</span>
+                </button>
+                {isAdmin && (
+                  <button
+                    id="improve-panel-toggle-btn"
+                    type="button"
+                    onClick={() => setIsImproveOpen((v) => !v)}
+                    className={`improve-toggle${isImproveOpen ? ' is-open' : ''}`}
+                    aria-expanded={isImproveOpen}
+                    aria-controls="improve-panel"
+                  >
+                    Train AI
+                    <span className="improve-toggle-chevron">
+                      <ChevronDownIcon />
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pointer-events-auto">
+                <button
+                  id="camera-toggle-btn"
+                  onClick={handleCameraToggle}
+                  title={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
+                  aria-label={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
+                  className="btn btn-ghost p-0 w-10 h-10 flex items-center justify-center bg-slate-900/80 backdrop-blur border border-white/10 text-slate-200 hover:bg-slate-800 rounded-xl shadow-lg"
+                  aria-pressed={isCameraOn}
+                >
+                  {isCameraOn ? <CameraOnIcon /> : <CameraOffIcon />}
+                </button>
+              </div>
+            </div>
+          </div>
 
           {/* ── Model error notice ── */}
           {modelError && (
@@ -554,23 +629,6 @@ function HomePage(): React.ReactElement {
                 )}
               </div>
             </div>
-          )}
-
-          {/* ── AI Improve panel toggle button ── */}
-          {isAdmin && (
-            <button
-              id="improve-panel-toggle-btn"
-              type="button"
-              onClick={() => setIsImproveOpen((v) => !v)}
-              className={`improve-toggle${isImproveOpen ? ' is-open' : ''}`}
-              aria-expanded={isImproveOpen}
-              aria-controls="improve-panel"
-            >
-              Train AI
-              <span className="improve-toggle-chevron">
-                <ChevronDownIcon />
-              </span>
-            </button>
           )}
         </>
       )}
@@ -736,14 +794,24 @@ function HomePage(): React.ReactElement {
           </div>
         </div>
       )}
+
+      {/* ── Calibration & Profile Modals ── */}
+      <CalibrationModal
+        isOpen={isCalibrationOpen}
+        onClose={() => setIsCalibrationOpen(false)}
+        currentPinchDistance={dominantHand ? getPinchDistance(dominantHand.landmarks) : null}
+      />
+      <ProfileSelectorModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        currentRecognizedLabel={currentGestureLabel !== -1 ? currentGestureLabel : null}
+        gestureLabels={gestureLabels}
+      />
     </>
   );
 }
 
-// ────────────────────────────────────────────────────────────
-// Export wrapped in ProtectedRoute
-// ────────────────────────────────────────────────────────────
-export default function HomePageWrapper(): React.ReactElement | null {
+export default function Home(): React.ReactElement {
   return (
     <ProtectedRoute>
       <HomePage />

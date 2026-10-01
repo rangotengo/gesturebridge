@@ -1,15 +1,83 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import type { HandPrediction } from '@/ml/gestureUtils';
+import { loadCalibrationSettings, CalibrationSettings } from '@/lib/calibration';
+import { loadActiveProfile, GestureProfile, AVAILABLE_ACTIONS } from '@/lib/gestureProfiles';
 
 interface GestureDisplayProps {
   predictions: HandPrediction[];
   isMouseModeActive?: boolean;
+  isElectron?: boolean;
+  gestureLabels?: string[];
 }
 
-export default function GestureDisplay({ predictions, isMouseModeActive = false }: GestureDisplayProps): React.ReactElement {
+const ACTION_ICONS: Record<string, string> = {
+  pointer_move: '🖱️',
+  left_click: '👆',
+  right_click: '⚡',
+  middle_click: '🖱️',
+  drag_hold: '🔒',
+  scroll_up: '⬆️',
+  scroll_down: '⬇️',
+  zoom_in: '🔍',
+  zoom_out: '🔎',
+  freeze_cursor: '❄️',
+  none: '⚪',
+};
+
+const GESTURE_ICONS: Record<string, string> = {
+  Pointing: '👉',
+  Fist: '✊',
+  Peace: '✌️',
+  'Open Palm': '🖐️',
+  Rock: '🤘',
+  Thumb: '👍',
+};
+
+const DEFAULT_GESTURE_INDICES: Record<string, number> = {
+  Pointing: 0,
+  Fist: 1,
+  Peace: 2,
+  'Open Palm': 3,
+  Rock: 4,
+  Thumb: 5,
+};
+
+export default function GestureDisplay({
+  predictions,
+  isMouseModeActive = false,
+  isElectron = false,
+  gestureLabels,
+}: GestureDisplayProps): React.ReactElement {
+  const [calibration, setCalibration] = useState<CalibrationSettings>(() => loadCalibrationSettings());
+  const [profile, setProfile] = useState<GestureProfile>(() => loadActiveProfile());
+
+  useEffect(() => {
+    const handleCalibrationUpdate = () => {
+      setCalibration(loadCalibrationSettings());
+    };
+    const handleProfileUpdate = () => {
+      setProfile(loadActiveProfile());
+    };
+
+    window.addEventListener('gesturebridge:calibration-updated', handleCalibrationUpdate);
+    window.addEventListener('gesturebridge:profile-updated', handleProfileUpdate);
+    window.addEventListener('storage', handleCalibrationUpdate);
+    window.addEventListener('storage', handleProfileUpdate);
+
+    return () => {
+      window.removeEventListener('gesturebridge:calibration-updated', handleCalibrationUpdate);
+      window.removeEventListener('gesturebridge:profile-updated', handleProfileUpdate);
+      window.removeEventListener('storage', handleCalibrationUpdate);
+      window.removeEventListener('storage', handleProfileUpdate);
+    };
+  }, []);
+
   const hasPredictions = predictions && predictions.length > 0;
+
+  // Determine dominant hand preference
+  const dominantHandPreference = calibration.dominantHand;
 
   return (
     <div
@@ -19,7 +87,13 @@ export default function GestureDisplay({ predictions, isMouseModeActive = false 
       aria-label={
         hasPredictions
           ? `Gestures detected: ${predictions
-              .map((p) => `${p.hand === 'Right' ? 'Dominant' : 'Modifier'} hand: ${p.gesture || 'none'} (${Math.round(p.confidence * 100)}%)`)
+              .map((p) => {
+                const isDominant =
+                  dominantHandPreference === 'Left'
+                    ? p.hand === 'Left'
+                    : p.hand === 'Right';
+                return `${isDominant ? 'Dominant' : 'Modifier'} hand: ${p.gesture || 'none'} (${Math.round(p.confidence * 100)}%)`;
+              })
               .join(', ')}`
           : 'No hand in frame'
       }
@@ -35,54 +109,70 @@ export default function GestureDisplay({ predictions, isMouseModeActive = false 
         </div>
       ) : (
         predictions.map((pred, index) => {
-          const isRight = pred.hand === 'Right';
-          const handColor = isRight ? '#f472b6' : '#00f0ff'; // Right is Dominant (pink), Left is Modifier (cyan)
+          const isDominant =
+            dominantHandPreference === 'Left'
+              ? pred.hand === 'Left'
+              : pred.hand === 'Right';
+
+          const handColor = isDominant ? '#f472b6' : '#00f0ff'; // Dominant is Pink, Modifier is Cyan
           const hasGesture = pred.gesture !== null && pred.confidence > 0.3;
 
-          let displayGesture = pred.gesture || '—';
+          let displayGesture = '—';
+          if (hasGesture && pred.gesture) {
+            const icon = GESTURE_ICONS[pred.gesture] ?? '✋';
+            displayGesture = `${icon} ${pred.gesture}`;
+          }
+
           let activeAction = 'Ready';
 
-          if (hasGesture) {
-            if (isRight) {
-              // Dominant Hand mapping
-              if (pred.gesture === 'Pointing') {
-                displayGesture = '👉 Pointing';
-                activeAction = isMouseModeActive ? '🖱️ Move Mouse' : 'Ready';
-              } else if (pred.gesture === 'Fist') {
-                displayGesture = '✊ Fist';
-                activeAction = isMouseModeActive ? '⬇️ Scroll Down' : 'Ready';
-              } else if (pred.gesture === 'Peace') {
-                displayGesture = '✌️ Peace';
-                activeAction = isMouseModeActive ? '⚡ Right Click' : 'Ready';
-              } else if (pred.gesture === 'Open Palm') {
-                displayGesture = '🖐️ Open Palm';
-                activeAction = 'Mode Toggle (5s Hold)';
-              } else if (pred.gesture === 'Rock') {
-                displayGesture = '🤘 Rock';
-                activeAction = isMouseModeActive ? '⬆️ Scroll Up' : 'Ready';
-              } else if (pred.gesture === 'Thumb') {
-                displayGesture = '👍 Thumb';
-                activeAction = 'Ready';
+          if (hasGesture && pred.gesture) {
+            if (isDominant) {
+              if (isMouseModeActive) {
+                // Dominant hand mouse action derived from active profile mapping
+                const gestureIndex =
+                  gestureLabels && gestureLabels.length > 0
+                    ? gestureLabels.indexOf(pred.gesture)
+                    : DEFAULT_GESTURE_INDICES[pred.gesture];
+
+                const mappedActionType =
+                  gestureIndex !== undefined && gestureIndex !== -1
+                    ? profile.mappings[gestureIndex]
+                    : undefined;
+
+                if (mappedActionType) {
+                  const actionDef = AVAILABLE_ACTIONS.find((a) => a.type === mappedActionType);
+                  const icon = ACTION_ICONS[mappedActionType] ?? '🎯';
+                  activeAction = `${icon} ${actionDef?.label ?? mappedActionType}`;
+                } else {
+                  activeAction = 'Ready';
+                }
+              } else {
+                // Non-mouse mode
+                if (isElectron) {
+                  if (pred.gesture === 'Open Palm') {
+                    activeAction = 'Mode Toggle (5s Hold)';
+                  } else if (pred.gesture === 'Fist') {
+                    activeAction = 'Mirror Mode (Hold)';
+                  } else {
+                    activeAction = 'Ready';
+                  }
+                } else {
+                  activeAction = 'Ready';
+                }
               }
             } else {
               // Modifier Hand mapping
-              if (pred.gesture === 'Fist') {
-                displayGesture = '✊ Fist';
-                activeAction = isMouseModeActive ? '🔒 Drag Mode Active' : 'Ready';
-              } else if (pred.gesture === 'Peace') {
-                displayGesture = '✌️ Peace';
-                activeAction = isMouseModeActive ? '🖱️ Middle Click' : 'Ready';
-              } else if (pred.gesture === 'Open Palm') {
-                displayGesture = '🖐️ Open Palm';
-                activeAction = isMouseModeActive ? '❄️ Freeze Mouse' : 'Ready';
-              } else if (pred.gesture === 'Pointing') {
-                displayGesture = '👉 Pointing';
-                activeAction = 'Ready';
-              } else if (pred.gesture === 'Rock') {
-                displayGesture = '🤘 Rock';
-                activeAction = 'Ready';
-              } else if (pred.gesture === 'Thumb') {
-                displayGesture = '👍 Thumb';
+              if (isMouseModeActive) {
+                if (pred.gesture === 'Fist') {
+                  activeAction = '🔒 Drag Mode Active';
+                } else if (pred.gesture === 'Peace') {
+                  activeAction = '🖱️ Middle Click';
+                } else if (pred.gesture === 'Open Palm') {
+                  activeAction = '❄️ Freeze Mouse';
+                } else {
+                  activeAction = 'Ready';
+                }
+              } else {
                 activeAction = 'Ready';
               }
             }
@@ -100,11 +190,11 @@ export default function GestureDisplay({ predictions, isMouseModeActive = false 
                 <span
                   className="text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full inline-block mb-2"
                   style={{
-                    backgroundColor: isRight ? 'rgba(244, 114, 182, 0.15)' : 'rgba(0, 240, 255, 0.15)',
+                    backgroundColor: isDominant ? 'rgba(244, 114, 182, 0.15)' : 'rgba(0, 240, 255, 0.15)',
                     color: handColor,
                   }}
                 >
-                  {isRight ? 'Dominant (Right)' : 'Modifier (Left)'}
+                  {isDominant ? `Dominant (${pred.hand})` : `Modifier (${pred.hand})`}
                 </span>
                 <p
                   className="text-3xl font-extrabold tracking-tight mt-1"

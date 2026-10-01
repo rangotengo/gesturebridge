@@ -40,7 +40,7 @@ export default function ModeToggleOverlay({
         }
       : {
           activeDescription: 'Docked in compact mode at the top center of your screen.',
-          icon: '🖱',
+          icon: '🖱️',
           label: 'Mouse Control',
           inactiveDescription: 'Restored to standard camera view mode.',
           gesture: 'Open Palm',
@@ -50,7 +50,7 @@ export default function ModeToggleOverlay({
   if (phase === 'toggled') {
     return (
       <div
-        className={`fixed inset-0 z-50 flex flex-col items-center justify-center transition-all duration-300 animate-in fade-in zoom-in-95 backdrop-blur-sm ${
+        className={`fixed inset-0 z-50 flex flex-col items-center justify-center transition-all duration-300 animate-fade-in backdrop-blur-sm ${
           modeIsActive ? 'bg-emerald-600/90' : 'bg-rose-600/90'
         }`}
       >
