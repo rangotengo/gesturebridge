@@ -234,11 +234,13 @@ function HomePage(): React.ReactElement {
     () => toggleInteractiveMode('mouse-control'),
     isElectron
   );
+  // A fist hold switches to Mirror Mode. Leave it off during mouse control,
+  // where that same fist is a pointer action.
   const mirrorHold = useHoldToToggle({
     isGestureActive: currentGestureLabel === 1 && wristPosition !== null,
     durationMs: 5_000,
     onToggle: () => toggleInteractiveMode('mirror'),
-    enabled: isElectron,
+    enabled: isElectron && !isMouseModeActive,
   });
   const mirrorExperienceEnabled = isElectron && isMirrorModeActive && isCameraOn;
   const { microphoneStatus } = useBlowDetection({
