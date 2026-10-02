@@ -11,6 +11,12 @@ export interface Size2D {
   height: number;
 }
 
+export interface ScreenSpace extends Size2D {
+  /** Virtual desktop origin. Negative when a display sits left or above the primary. */
+  x?: number;
+  y?: number;
+}
+
 /**
  * Shared point-to-screen mapping for OS cursor control.
  * MediaPipe Hand landmark 8 is the index fingertip; X is mirrored to match the
@@ -74,10 +80,47 @@ export function mapRawLandmarkToMirroredCoverViewport(
 
 export function mapPointerToScreen(
   pointer: NormalizedPointerPosition,
-  screenSize: Size2D
+  screenSize: ScreenSpace
 ): { x: number; y: number } {
+  const originX = screenSize.x ?? 0;
+  const originY = screenSize.y ?? 0;
   return {
-    x: pointer.x * screenSize.width,
-    y: pointer.y * screenSize.height,
+    x: originX + pointer.x * screenSize.width,
+    y: originY + pointer.y * screenSize.height,
+  };
+}
+
+/**
+ * One-euro-free exponential smoothing with a tremor deadzone.
+ * Distance is measured from the last emitted point, so a slow drift still
+ * breaks out of the deadzone once the accumulated travel exceeds it.
+ * Higher `smoothingAlpha` follows the hand more closely.
+ */
+export function smoothPointer(
+  next: NormalizedPointerPosition,
+  previous: NormalizedPointerPosition | null,
+  smoothingAlpha: number,
+  deadzoneRadius: number
+): NormalizedPointerPosition {
+  if (
+    !previous ||
+    !Number.isFinite(previous.x) ||
+    !Number.isFinite(previous.y) ||
+    !Number.isFinite(next.x) ||
+    !Number.isFinite(next.y)
+  ) {
+    return { x: next.x, y: next.y };
+  }
+
+  const dx = next.x - previous.x;
+  const dy = next.y - previous.y;
+  if (Math.hypot(dx, dy) < Math.max(0, deadzoneRadius)) {
+    return previous;
+  }
+
+  const alpha = Math.min(1, Math.max(0, smoothingAlpha));
+  return {
+    x: previous.x + dx * alpha,
+    y: previous.y + dy * alpha,
   };
 }

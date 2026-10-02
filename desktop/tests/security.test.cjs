@@ -12,6 +12,7 @@ const {
   isTrustedOriginUrl,
   isTrustedSenderUrl,
   parsePointPayload,
+  resolvePointerDesktop,
 } = require('../dist/security.js');
 
 test('local URL validation rejects external hosts and userinfo', () => {
@@ -49,6 +50,48 @@ test('permissions allow media and clipboard access', () => {
   assert.equal(isAllowedMediaPermission('clipboard-sanitized-write'), true);
   assert.equal(isAllowedMediaPermission('geolocation'), false);
   assert.equal(isAllowedMediaPermission('notifications'), false);
+});
+
+test('macOS pointer mapping uses display points, not robotjs retina pixels', () => {
+  const displays = [{ x: 0, y: 0, width: 1512, height: 982 }];
+  const robotPixels = { width: 3024, height: 1964 };
+
+  assert.deepEqual(resolvePointerDesktop('darwin', displays, robotPixels), {
+    x: 0,
+    y: 0,
+    width: 1512,
+    height: 982,
+  });
+});
+
+test('macOS pointer mapping covers displays that sit left or above the primary', () => {
+  const displays = [
+    { x: -1920, y: -100, width: 1920, height: 1080 },
+    { x: 0, y: 0, width: 1512, height: 982 },
+  ];
+
+  assert.deepEqual(resolvePointerDesktop('darwin', displays, { width: 3024, height: 1964 }), {
+    x: -1920,
+    y: -100,
+    width: 3432,
+    height: 1082,
+  });
+});
+
+test('other platforms keep robotjs screen pixels when the module is available', () => {
+  const displays = [{ x: 0, y: 0, width: 1920, height: 1080 }];
+  assert.deepEqual(resolvePointerDesktop('win32', displays, { width: 2560, height: 1440 }), {
+    x: 0,
+    y: 0,
+    width: 2560,
+    height: 1440,
+  });
+  assert.deepEqual(resolvePointerDesktop('linux', displays, null), {
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+  });
 });
 
 test('mouse coordinates reject malformed, non-finite, and unreasonable values', () => {

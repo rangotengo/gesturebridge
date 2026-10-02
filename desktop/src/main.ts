@@ -27,16 +27,20 @@ import {
   isValidAuthToken,
   isZoomDirection,
   parsePointPayload,
+  resolvePointerDesktop,
+  type DesktopBounds,
+  type MouseButton,
   type MouseToggleButton,
 } from './security';
 
 interface RobotModule {
   moveMouse(x: number, y: number): void;
   mouseClick(button?: 'left' | 'right' | 'middle', double?: boolean): void;
-  mouseToggle(action: 'down' | 'up', button?: 'left' | 'right'): void;
+  mouseToggle(action: 'down' | 'up', button?: 'left' | 'right' | 'middle'): void;
   scrollMouse(x: number, y: number): void;
   keyToggle(key: string, action: 'down' | 'up'): void;
   getScreenSize(): { width: number; height: number };
+  setMouseDelay(ms: number): void;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -63,6 +67,14 @@ function getRobot(): RobotModule | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     robotModule = require('robotjs') as RobotModule;
+    // robotjs sleeps after every mouse call. The default 10ms blocks the main
+    // process long enough to stall a 60fps pointer stream and to glue click
+    // down/up into one ignored event. Click timing is handled explicitly.
+    try {
+      robotModule.setMouseDelay(0);
+    } catch (delayError) {
+      console.warn('Unable to set robotjs mouse delay:', delayError);
+    }
     return robotModule;
   } catch (err) {
     robotModule = null;
@@ -134,6 +146,130 @@ function clampPointToDisplay(x: number, y: number): { x: number; y: number } {
     x: clamp(roundedX, bounds.x, bounds.x + bounds.width - 1),
     y: clamp(roundedY, bounds.y, bounds.y + bounds.height - 1),
   };
+}
+
+function currentDisplayBounds(): DesktopBounds[] {
+  return screen.getAllDisplays().map((display) => display.bounds);
+}
+
+function currentRobotScreenSize(): { width: number; height: number } | null {
+  const robot = getRobot();
+  if (!robot) return null;
+  try {
+    const size = robot.getScreenSize();
+    if (size.width > 0 && size.height > 0) return size;
+  } catch (err) {
+    console.error('Error getting screen size from robotjs:', err);
+  }
+  return null;
+}
+
+function pointerDesktopBounds(): DesktopBounds {
+  const robotSize = process.platform === 'darwin' ? null : currentRobotScreenSize();
+  return resolvePointerDesktop(process.platform, currentDisplayBounds(), robotSize);
+}
+
+const CLICK_SETTLE_MS = 20;
+const CLICK_HOLD_MS = 45;
+
+let lastCommandedPoint: { x: number; y: number } | null = null;
+let accessibilityGranted = process.platform !== 'darwin';
+let accessibilityWarningLogged = false;
+let syntheticClickTimer: NodeJS.Timeout | null = null;
+let syntheticClick: { button: MouseButton; phase: 'settle' | 'down' } | null = null;
+
+function ensurePointerControl(): boolean {
+  if (process.platform !== 'darwin') return true;
+  if (accessibilityGranted) return true;
+
+  try {
+    accessibilityGranted = systemPreferences.isTrustedAccessibilityClient(true);
+  } catch (err) {
+    console.error('Error checking Accessibility permission:', err);
+    return false;
+  }
+
+  if (!accessibilityGranted && !accessibilityWarningLogged) {
+    accessibilityWarningLogged = true;
+    console.warn(
+      'GestureBridge needs Accessibility permission to move and click the pointer. Enable GestureBridge in System Settings > Privacy & Security > Accessibility.'
+    );
+  }
+
+  return accessibilityGranted;
+}
+
+function cancelSyntheticClick(releaseIfDown: boolean): void {
+  if (syntheticClickTimer) {
+    clearTimeout(syntheticClickTimer);
+    syntheticClickTimer = null;
+  }
+
+  const pending = syntheticClick;
+  syntheticClick = null;
+  if (!releaseIfDown || pending?.phase !== 'down') return;
+
+  try {
+    getRobot()?.mouseToggle('up', pending.button);
+  } catch (err) {
+    console.error('Error releasing in-flight mouse click:', err);
+  }
+}
+
+function commandPointerMove(robot: RobotModule, x: number, y: number): void {
+  const clamped = clampPointToDisplay(x, y);
+  lastCommandedPoint = clamped;
+  robot.moveMouse(clamped.x, clamped.y);
+}
+
+function commandPointerClick(robot: RobotModule, button: MouseButton): void {
+  if (syntheticClick) return;
+  if (button !== 'middle' && heldMouseButtons.has(button)) return;
+
+  // robotjs clicks at getMousePos(), which lags the last moveMouse, and it
+  // posts button down and up back to back. Park on the last commanded point,
+  // let that move land, then hold the button long enough for the OS to see it.
+  syntheticClick = { button, phase: 'settle' };
+  syntheticClickTimer = setTimeout(() => {
+    if (syntheticClick?.button !== button) {
+      cancelSyntheticClick(false);
+      return;
+    }
+
+    if (lastCommandedPoint) {
+      try {
+        robot.moveMouse(lastCommandedPoint.x, lastCommandedPoint.y);
+      } catch (err) {
+        console.error('Error repositioning pointer before click:', err);
+      }
+    }
+
+    syntheticClickTimer = setTimeout(() => {
+      if (syntheticClick?.button !== button) {
+        cancelSyntheticClick(false);
+        return;
+      }
+
+      try {
+        robot.mouseToggle('down', button);
+      } catch (err) {
+        console.error('Error pressing mouse button:', err);
+        cancelSyntheticClick(false);
+        return;
+      }
+
+      syntheticClick = { button, phase: 'down' };
+      syntheticClickTimer = setTimeout(() => {
+        syntheticClickTimer = null;
+        syntheticClick = null;
+        try {
+          getRobot()?.mouseToggle('up', button);
+        } catch (err) {
+          console.error('Error releasing mouse click:', err);
+        }
+      }, CLICK_HOLD_MS);
+    }, CLICK_SETTLE_MS);
+  }, CLICK_SETTLE_MS);
 }
 
 function configurePermissionGuards(allowedOrigin: string): void {
@@ -211,6 +347,7 @@ async function ensureDarwinMediaAccess(): Promise<{ camera: boolean; microphone:
 }
 
 function releaseHeldMouseButtons(reason: string = 'manual'): void {
+  cancelSyntheticClick(true);
   const result = heldMouseButtons.releaseAll(reason);
   if (!result) return;
 
@@ -438,17 +575,32 @@ ipcMain.handle('system:get-media-status', (event, payload: unknown) => {
   };
 });
 
+ipcMain.handle('system:accessibility-status', (event, payload: unknown) => {
+  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'system:accessibility-status', 20)) {
+    return { trusted: false };
+  }
+  if (process.platform !== 'darwin') return { trusted: true };
+  try {
+    const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+    if (trusted) accessibilityGranted = true;
+    return { trusted };
+  } catch (err) {
+    console.error('Error reading Accessibility permission:', err);
+    return { trusted: false };
+  }
+});
+
 ipcMain.on('mouse:move', (event, payload: unknown) => {
   if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:move', 120)) return;
   const pointPayload = parsePointPayload(payload);
   if (!pointPayload) return;
+  if (!ensurePointerControl()) return;
 
   const robot = getRobot();
   if (!robot) return;
 
   try {
-    const clamped = clampPointToDisplay(pointPayload.x, pointPayload.y);
-    robot.moveMouse(clamped.x, clamped.y);
+    commandPointerMove(robot, pointPayload.x, pointPayload.y);
     if (heldMouseButtons.getHeldButtons().length > 0) {
       deadmanTimer.heartbeat();
     }
@@ -465,12 +617,13 @@ ipcMain.on('mouse:click', (event, payload: unknown) => {
   if (button !== undefined && !isMouseButton(button)) {
     return;
   }
+  if (!ensurePointerControl()) return;
 
   const robot = getRobot();
   if (!robot) return;
 
   try {
-    robot.mouseClick(button ?? 'left');
+    commandPointerClick(robot, button ?? 'left');
   } catch (err) {
     console.error('Error clicking mouse:', err);
   }
@@ -480,11 +633,13 @@ ipcMain.on('mouse:scroll', (event, payload: unknown) => {
   if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'mouse:scroll', 60)) return;
   if (typeof payload !== 'object' || payload === null || !('direction' in payload) || !isScrollDirection(payload.direction)) return;
 
+  if (!ensurePointerControl()) return;
+
   const robot = getRobot();
   if (!robot) return;
 
   try {
-    robot.scrollMouse(0, payload.direction === 'up' ? -5 : 5);
+    robot.scrollMouse(0, payload.direction === 'up' ? -7 : 7);
   } catch (err) {
     console.error('Error scrolling:', err);
   }
@@ -504,6 +659,9 @@ ipcMain.on('mouse:button', (event, payload: unknown) => {
   if (action !== 'up' && !consumeIpcRateLimit(event, 'mouse:button', 60)) {
     return;
   }
+
+  if (!ensurePointerControl()) return;
+  cancelSyntheticClick(true);
 
   const robot = getRobot();
   if (!robot) return;
@@ -527,6 +685,8 @@ ipcMain.on('mouse:button', (event, payload: unknown) => {
 ipcMain.on('zoom', (event, payload: unknown) => {
   if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'zoom', 30)) return;
   if (typeof payload !== 'object' || payload === null || !('direction' in payload) || !isZoomDirection(payload.direction)) return;
+
+  if (!ensurePointerControl()) return;
 
   const robot = getRobot();
   if (!robot) return;
@@ -554,17 +714,7 @@ ipcMain.handle('screen:size', (event, payload: unknown) => {
     throw new Error('Rate limit exceeded for channel: screen:size');
   }
 
-  const robot = getRobot();
-  if (robot) {
-    try {
-      return robot.getScreenSize();
-    } catch (err) {
-      console.error('Error getting screen size from robotjs:', err);
-    }
-  }
-
-  const { bounds } = screen.getPrimaryDisplay();
-  return { width: bounds.width, height: bounds.height };
+  return pointerDesktopBounds();
 });
 
 ipcMain.on('window:set-compact', (event, payload: unknown) => {

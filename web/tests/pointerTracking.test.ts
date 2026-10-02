@@ -3,6 +3,7 @@ import {
   getMirroredIndexTipPosition,
   mapPointerToScreen,
   mapRawLandmarkToMirroredCoverViewport,
+  smoothPointer,
 } from '../features/control/pointerTracking';
 import type { Landmark } from '../ml/gestureUtils';
 
@@ -52,5 +53,18 @@ describe('pointer tracking', () => {
     );
 
     expect(viewport).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it('adds the virtual desktop origin when a display sits left of the primary', () => {
+    expect(mapPointerToScreen({ x: 0.5, y: 0 }, { x: -1_920, y: 0, width: 3_840, height: 1_080 })).toEqual({
+      x: 0,
+      y: 0,
+    });
+  });
+
+  it('smooths travel past the deadzone and ignores smaller tremor', () => {
+    const origin = { x: 0.4, y: 0.4 };
+    expect(smoothPointer({ x: 0.402, y: 0.4 }, origin, 0.5, 0.01)).toEqual(origin);
+    expect(smoothPointer({ x: 0.5, y: 0.4 }, origin, 0.5, 0.01)).toEqual({ x: 0.45, y: 0.4 });
   });
 });

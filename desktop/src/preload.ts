@@ -19,8 +19,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   zoom: (direction: 'in' | 'out'): void => {
     ipcRenderer.send('zoom', { direction, token: appToken });
   },
-  getScreenSize: (): Promise<{ width: number; height: number }> => {
-    return ipcRenderer.invoke('screen:size', { token: appToken }) as Promise<{ width: number; height: number }>;
+  getScreenSize: (): Promise<{ x: number; y: number; width: number; height: number }> => {
+    return ipcRenderer.invoke('screen:size', { token: appToken }) as Promise<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }>;
+  },
+  getAccessibilityStatus: (): Promise<{ trusted: boolean }> => {
+    return ipcRenderer.invoke('system:accessibility-status', { token: appToken }) as Promise<{
+      trusted: boolean;
+    }>;
   },
   setCompactMode: (compact: boolean): void => {
     ipcRenderer.send('window:set-compact', { compact, token: appToken });

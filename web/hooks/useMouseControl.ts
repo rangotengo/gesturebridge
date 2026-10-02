@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { HandData } from '@/ml/gestureUtils';
 import { isPinching } from '@/hooks/usePinchDetector';
+import { getMirroredIndexTipPosition, type ScreenSpace } from '@/features/control/pointerTracking';
 import {
-  CLICK_COOLDOWN_MS,
-  SCROLL_INTERVAL_MS,
-} from '@/lib/gestureConfig';
-import { getMirroredIndexTipPosition, mapPointerToScreen } from '@/features/control/pointerTracking';
+  createMouseControlState,
+  stepMouseControl,
+  type MouseCommand,
+} from '@/features/control/mouseActions';
 import {
   loadCalibrationSettings,
   applyCalibrationMapping,
@@ -13,8 +14,46 @@ import {
 } from '@/lib/calibration';
 import {
   loadActiveProfile,
+  type GestureActionType,
   type GestureProfile,
 } from '@/lib/gestureProfiles';
+
+const DEFAULT_SCREEN: ScreenSpace = { x: 0, y: 0, width: 1920, height: 1080 };
+
+function readScreenSpace(size: Partial<ScreenSpace> | null | undefined): ScreenSpace | null {
+  if (!size || typeof size.width !== 'number' || typeof size.height !== 'number') return null;
+  if (size.width <= 0 || size.height <= 0) return null;
+  return {
+    x: typeof size.x === 'number' && Number.isFinite(size.x) ? size.x : 0,
+    y: typeof size.y === 'number' && Number.isFinite(size.y) ? size.y : 0,
+    width: size.width,
+    height: size.height,
+  };
+}
+
+function dispatchMouseCommand(command: MouseCommand): void {
+  const api = window.electronAPI;
+  if (!api) return;
+  switch (command.type) {
+    case 'move':
+      api.mouseMove(command.x, command.y);
+      break;
+    case 'click':
+      api.mouseClick(command.button);
+      break;
+    case 'button':
+      api.mouseButton(command.button, command.action);
+      break;
+    case 'scroll':
+      api.mouseScroll(command.direction);
+      break;
+    case 'zoom':
+      api.zoom(command.direction);
+      break;
+    default:
+      break;
+  }
+}
 
 // Extend window with Electron API types
 declare global {
@@ -25,7 +64,8 @@ declare global {
       mouseButton: (button: 'left' | 'right', action: 'down' | 'up') => void;
       mouseScroll: (direction: 'up' | 'down') => void;
       zoom: (direction: 'in' | 'out') => void;
-      getScreenSize: () => Promise<{ width: number; height: number }>;
+      getScreenSize: () => Promise<{ x?: number; y?: number; width: number; height: number }>;
+      getAccessibilityStatus?: () => Promise<{ trusted: boolean }>;
       isElectron: boolean;
       setCompactMode?: (compact: boolean) => void;
       onEmergencyStop?: (callback: () => void) => () => void;
@@ -42,15 +82,8 @@ export function useMouseControl(
   currentGestureLabel: number,
   isFrozen: boolean
 ): void {
-  const lastEventTime = useRef(0);
-  const THROTTLE_MS = 16; // ~60fps
-  const clickCooldownRef = useRef(0);
-  const lastScrollTime = useRef(0);
-  const wasPinchingRef = useRef(false);
-  const pinchStartTimeRef = useRef(0);
-  const isDraggingRef = useRef(false);
-  const lastRawPositionRef = useRef<{ x: number; y: number } | null>(null);
-  const screenSizeRef = useRef<{ width: number; height: number }>({ width: 1920, height: 1080 });
+  const controlStateRef = useRef(createMouseControlState());
+  const screenSizeRef = useRef<ScreenSpace>(DEFAULT_SCREEN);
 
   // Settings
   const [calibration, setCalibration] = useState<CalibrationSettings>(loadCalibrationSettings);
@@ -62,12 +95,12 @@ export function useMouseControl(
       setProfile(loadActiveProfile());
     };
     window.addEventListener('storage', handleSettingsChange);
-    window.addEventListener('calibration-updated', handleSettingsChange);
-    window.addEventListener('profile-updated', handleSettingsChange);
+    window.addEventListener('gesturebridge:calibration-updated', handleSettingsChange);
+    window.addEventListener('gesturebridge:profile-updated', handleSettingsChange);
     return () => {
       window.removeEventListener('storage', handleSettingsChange);
-      window.removeEventListener('calibration-updated', handleSettingsChange);
-      window.removeEventListener('profile-updated', handleSettingsChange);
+      window.removeEventListener('gesturebridge:calibration-updated', handleSettingsChange);
+      window.removeEventListener('gesturebridge:profile-updated', handleSettingsChange);
     };
   }, []);
 
@@ -80,8 +113,9 @@ export function useMouseControl(
       window.electronAPI
         ?.getScreenSize()
         .then((size) => {
-          if (mounted && size && size.width > 0 && size.height > 0) {
-            screenSizeRef.current = size;
+          const next = readScreenSpace(size);
+          if (mounted && next) {
+            screenSizeRef.current = next;
           }
         })
         .catch((err: unknown) => {
@@ -101,119 +135,46 @@ export function useMouseControl(
   useEffect(() => {
     if (!window.electronAPI?.onDragReleased) return;
     const unsubscribe = window.electronAPI.onDragReleased((data) => {
-      if (data.buttons.includes('left') && isDraggingRef.current) {
-        isDraggingRef.current = false;
-        wasPinchingRef.current = false;
-        pinchStartTimeRef.current = 0;
-      }
+      if (!data.buttons.includes('left')) return;
+      const state = controlStateRef.current;
+      controlStateRef.current = {
+        ...state,
+        pinchStartedAt: null,
+        pinchArmed: false,
+        pinchDragging: false,
+        gestureDragging: false,
+        leftDown: false,
+      };
     });
     return unsubscribe;
   }, []);
 
   useEffect(() => {
-    // Only run if Mouse Mode is active, not frozen, and Electron API is available
-    if (!isMouseModeActive || isFrozen || !window.electronAPI || !dominantHand) {
-      if (isDraggingRef.current && window.electronAPI) {
-        window.electronAPI.mouseButton('left', 'up');
-        isDraggingRef.current = false;
-      }
-      return;
-    }
+    const landmarks = dominantHand?.landmarks;
+    const rawPos = landmarks ? getMirroredIndexTipPosition(landmarks) : null;
+    const pointer = rawPos ? applyCalibrationMapping(rawPos, calibration) : null;
+    const mappedAction: GestureActionType | null =
+      currentGestureLabel >= 0 ? (profile.mappings[currentGestureLabel] ?? null) : null;
+    const gestureAction = mappedAction && mappedAction !== 'none' ? mappedAction : null;
 
-    const now = Date.now();
-    const landmarks = dominantHand.landmarks;
-    const rawPos = getMirroredIndexTipPosition(landmarks);
-    if (!rawPos) return;
+    const step = stepMouseControl(controlStateRef.current, {
+      now: Date.now(),
+      enabled: isMouseModeActive,
+      tracking: Boolean(pointer),
+      externallyFrozen: isFrozen,
+      movementEnabled: Object.values(profile.mappings).includes('pointer_move'),
+      pinching: landmarks ? isPinching(landmarks, calibration.pinchThreshold) : false,
+      gestureAction,
+      pointer,
+      screen: screenSizeRef.current,
+      smoothingAlpha: calibration.smoothingAlpha,
+      deadzoneRadius: calibration.deadzoneRadius,
+    });
+    controlStateRef.current = step.state;
 
-    // Apply calibration mapping
-    const pointerPos = applyCalibrationMapping(rawPos, calibration);
-    lastRawPositionRef.current = rawPos;
-
-    // 1. Move Mouse using cached screen dimensions (zero latency, within IPC rate limits)
-    if (now - lastEventTime.current >= THROTTLE_MS) {
-      const coords = mapPointerToScreen(pointerPos, screenSizeRef.current);
-      window.electronAPI.mouseMove(coords.x, coords.y);
-      lastEventTime.current = now;
-    }
-
-    // 2. Pinch Detection for Dragging
-    const pinching = isPinching(landmarks, calibration.pinchThreshold);
-    const DRAG_HOLD_MS = 300;
-
-    if (pinching) {
-      if (!wasPinchingRef.current) {
-        wasPinchingRef.current = true;
-        pinchStartTimeRef.current = now;
-      } else if (now - pinchStartTimeRef.current >= DRAG_HOLD_MS && !isDraggingRef.current) {
-        isDraggingRef.current = true;
-        window.electronAPI.mouseButton('left', 'down');
-      }
-    } else {
-      if (isDraggingRef.current) {
-        window.electronAPI.mouseButton('left', 'up');
-        isDraggingRef.current = false;
-      }
-      wasPinchingRef.current = false;
-      pinchStartTimeRef.current = 0;
-    }
-
-    // 3. Dynamic Gesture Action Execution from Profile
-    const mappedAction = profile.mappings[currentGestureLabel];
-
-    if (mappedAction && mappedAction !== 'none') {
-      switch (mappedAction) {
-        case 'left_click':
-          if (now - clickCooldownRef.current >= CLICK_COOLDOWN_MS) {
-            window.electronAPI.mouseClick('left');
-            clickCooldownRef.current = now;
-          }
-          break;
-
-        case 'right_click':
-          if (now - clickCooldownRef.current >= CLICK_COOLDOWN_MS) {
-            window.electronAPI.mouseClick('right');
-            clickCooldownRef.current = now;
-          }
-          break;
-
-        case 'middle_click':
-          if (now - clickCooldownRef.current >= CLICK_COOLDOWN_MS) {
-            window.electronAPI.mouseClick('middle');
-            clickCooldownRef.current = now;
-          }
-          break;
-
-        case 'scroll_up':
-          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
-            window.electronAPI.mouseScroll('up');
-            lastScrollTime.current = now;
-          }
-          break;
-
-        case 'scroll_down':
-          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
-            window.electronAPI.mouseScroll('down');
-            lastScrollTime.current = now;
-          }
-          break;
-
-        case 'zoom_in':
-          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
-            window.electronAPI.zoom('in');
-            lastScrollTime.current = now;
-          }
-          break;
-
-        case 'zoom_out':
-          if (now - lastScrollTime.current >= SCROLL_INTERVAL_MS) {
-            window.electronAPI.zoom('out');
-            lastScrollTime.current = now;
-          }
-          break;
-
-        default:
-          break;
-      }
+    if (!window.electronAPI) return;
+    for (const command of step.commands) {
+      dispatchMouseCommand(command);
     }
   }, [dominantHand, isMouseModeActive, currentGestureLabel, isFrozen, calibration, profile]);
 }

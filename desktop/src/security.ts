@@ -246,3 +246,67 @@ export class HeldButtonTracker {
     return { buttons, reason };
   }
 }
+
+export interface DesktopBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RobotScreenSize {
+  width: number;
+  height: number;
+}
+
+const FALLBACK_DESKTOP_BOUNDS: DesktopBounds = { x: 0, y: 0, width: 1920, height: 1080 };
+
+function isPositiveSize(width: number, height: number): boolean {
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
+}
+
+function isDesktopBounds(bounds: DesktopBounds): boolean {
+  return Number.isFinite(bounds.x) && Number.isFinite(bounds.y) && isPositiveSize(bounds.width, bounds.height);
+}
+
+function unionDesktopBounds(displays: readonly DesktopBounds[]): DesktopBounds | null {
+  const visible = displays.filter(isDesktopBounds);
+  if (visible.length === 0) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const display of visible) {
+    minX = Math.min(minX, display.x);
+    minY = Math.min(minY, display.y);
+    maxX = Math.max(maxX, display.x + display.width);
+    maxY = Math.max(maxY, display.y + display.height);
+  }
+
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/**
+ * Pointer coordinates must use the same space as the OS mouse event.
+ * On macOS, robotjs `getScreenSize()` returns physical pixels (`CGDisplayPixelsWide`)
+ * while `moveMouse` posts `CGEvent`s in points. Electron display bounds are points,
+ * including a non-zero virtual origin when another display sits left or above.
+ * Other platforms keep robotjs pixels when that module is available.
+ */
+export function resolvePointerDesktop(
+  platform: string,
+  displays: readonly DesktopBounds[],
+  robotScreen: RobotScreenSize | null
+): DesktopBounds {
+  const union = unionDesktopBounds(displays);
+  if (platform === 'darwin') {
+    return union ?? { ...FALLBACK_DESKTOP_BOUNDS };
+  }
+
+  if (robotScreen && isPositiveSize(robotScreen.width, robotScreen.height)) {
+    return { x: 0, y: 0, width: robotScreen.width, height: robotScreen.height };
+  }
+
+  return union ?? { ...FALLBACK_DESKTOP_BOUNDS };
+}
