@@ -476,7 +476,9 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
   if (isDev) {
-    mainWindow.webContents.openDevTools();
+    // Detached tools keep the compact window's bounds equal to the camera.
+    // A docked drawer would shrink the page inside the small overlay.
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
   mainWindow.on('closed', () => {
@@ -735,10 +737,11 @@ ipcMain.on('window:set-compact', (event, payload: unknown) => {
         normalBounds = mainWindow.getBounds();
       }
       const { workArea } = screen.getPrimaryDisplay();
-      const width = 360;
-      const height = 240;
-      const x = workArea.x + workArea.width - width - 20;
-      const y = workArea.y + workArea.height - height - 20;
+      // 16:9 matches the camera so object-cover does not crop the face.
+      const width = 480;
+      const height = 270;
+      const x = workArea.x + workArea.width - width - 16;
+      const y = workArea.y + workArea.height - height - 16;
 
       mainWindow.setAlwaysOnTop(true, 'floating');
       mainWindow.setBounds({ x, y, width, height });

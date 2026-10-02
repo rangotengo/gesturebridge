@@ -61,6 +61,18 @@ function ChevronDownIcon(): React.ReactElement {
   );
 }
 
+function gestureMark(label: string): string {
+  switch (label) {
+    case 'Fist': return '✊ ';
+    case 'Peace': return '✌️ ';
+    case 'Pointing': return '👉 ';
+    case 'Open Palm': return '🖐️ ';
+    case 'Rock': return '🤘 ';
+    case 'Thumb': return '👍 ';
+    default: return '';
+  }
+}
+
 // ────────────────────────────────────────────────────────────
 // Main page
 // ────────────────────────────────────────────────────────────
@@ -75,6 +87,7 @@ function HomePage(): React.ReactElement {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [predictions, setPredictions] = useState<HandPrediction[]>([]);
   const [activeMode, setActiveMode] = useState<ControlMode>('recognition');
+  const [pointerAccessTrusted, setPointerAccessTrusted] = useState(true);
   const [fogDensity, setFogDensity] = useState(0);
   const [blowNonce, setBlowNonce] = useState(0);
 
@@ -159,6 +172,31 @@ function HomePage(): React.ReactElement {
       selectControlMode('recognition');
     });
   }, [isElectron, selectControlMode]);
+
+  useEffect(() => {
+    if (!isMouseModeActive || typeof window === 'undefined' || !window.electronAPI?.getAccessibilityStatus) {
+      return;
+    }
+
+    let cancelled = false;
+    const checkAccess = (): void => {
+      window.electronAPI
+        ?.getAccessibilityStatus?.()
+        .then((status) => {
+          if (!cancelled) setPointerAccessTrusted(status.trusted);
+        })
+        .catch(() => {
+          if (!cancelled) setPointerAccessTrusted(true);
+        });
+    };
+
+    checkAccess();
+    const timer = window.setInterval(checkAccess, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isMouseModeActive]);
 
   // Identify dominant and modifier hands honoring calibration preference
   const handRoles = assignHandRoles(
@@ -273,13 +311,11 @@ function HomePage(): React.ReactElement {
     if (typeof window !== 'undefined' && window.electronAPI?.setCompactMode) {
       window.electronAPI.setCompactMode(isMouseModeActive);
     }
-    if (isMouseModeActive) {
-      document.body.classList.add('compact');
-    } else {
-      document.body.classList.remove('compact');
-    }
+    document.body.classList.toggle('compact', isMouseModeActive);
+    document.documentElement.classList.toggle('compact', isMouseModeActive);
     return () => {
       document.body.classList.remove('compact');
+      document.documentElement.classList.remove('compact');
     };
   }, [isMouseModeActive, emit]);
 
@@ -478,13 +514,15 @@ function HomePage(): React.ReactElement {
           isModeActive={mirrorHold.phase !== 'idle' ? isMirrorModeActive : isMouseModeActive}
         />
       )}
-      {/* ── Compact Square UI (Mouse Control Mode) ── */}
+      {/* ── Compact camera widget (Mouse Control Mode) ── */}
       {isMouseModeActive && (
         <div
-          className="fixed inset-0 w-[240px] h-[240px] bg-slate-950/20 border border-white/15 rounded-2xl shadow-2xl flex flex-col items-center justify-between p-3 select-none overflow-hidden z-20"
+          className="compact-hud"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
-          {/* Zoom Overlay (rendered absolutely inside the container) */}
+          <div className="compact-hud-scrim is-top" aria-hidden="true" />
+          <div className="compact-hud-scrim is-bottom" aria-hidden="true" />
+
           <div className={`absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-sm z-30 transition-all duration-300 pointer-events-none ${isZooming ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
             <span className="text-4xl font-extrabold text-cyan-400 drop-shadow-lg flex flex-col items-center gap-1">
               <span>{zoomDirection === 'in' ? '🔍+' : '🔍−'}</span>
@@ -494,63 +532,57 @@ function HomePage(): React.ReactElement {
             </span>
           </div>
 
-          {/* Top Bar: Title & Drag / Freeze Indicators */}
-          <div className="w-full flex items-center justify-between pointer-events-none">
-            <span className="text-[10px] uppercase tracking-wider font-bold text-white/40">GestureBridge</span>
-            <div className="flex gap-1 items-center">
+          <div className="relative z-10 flex w-full items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-white/90 backdrop-blur-md">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" aria-hidden="true" />
+              GestureBridge
+            </span>
+            <div className="flex items-center gap-1">
               {isDragging && (
-                <span className="text-[9px] uppercase font-black tracking-widest text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 px-1.5 py-0.5 rounded">
+                <span className="rounded-full border border-yellow-400/30 bg-black/55 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-yellow-300">
                   Drag
                 </span>
               )}
               {isFrozen && (
-                <span className="text-[9px] uppercase font-black tracking-widest text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-1.5 py-0.5 rounded">
+                <span className="rounded-full border border-cyan-400/30 bg-black/55 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-cyan-300">
                   Frozen
                 </span>
               )}
             </div>
           </div>
 
-          {/* Center / Bottom: current gesture & mapped profile actions displayed live */}
           <div
-            className="w-full flex flex-col gap-1.5 items-center font-extrabold text-xs tracking-tight text-white/95"
+            className="relative z-10 flex w-full flex-col items-center gap-1.5"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            {/* Dominant Hand Gesture + Active Action */}
             {currentGestureLabel !== -1 && gestureLabels[currentGestureLabel] ? (
               <div className="flex flex-col items-center gap-1">
-                <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-black border border-white/10 flex items-center gap-1 animate-fade-in whitespace-nowrap">
-                  <span className="w-1.5 h-1.5 rounded-full bg-pink-500" />
-                  {gestureLabels[currentGestureLabel] === 'Fist' && '✊ '}
-                  {gestureLabels[currentGestureLabel] === 'Peace' && '✌️ '}
-                  {gestureLabels[currentGestureLabel] === 'Pointing' && '👉 '}
-                  {gestureLabels[currentGestureLabel] === 'Open Palm' && '🖐️ '}
-                  {gestureLabels[currentGestureLabel] === 'Rock' && '🤘 '}
-                  {gestureLabels[currentGestureLabel] === 'Thumb' && '👍 '}
+                <span className="flex items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[11px] font-black tracking-tight text-white backdrop-blur-md">
+                  <span className="h-1.5 w-1.5 rounded-full bg-pink-500" />
+                  {gestureMark(gestureLabels[currentGestureLabel])}
                   {gestureLabels[currentGestureLabel]}
                 </span>
                 {dominantActionDef && dominantActionDef.type !== 'none' && (
-                  <span className="text-[9px] uppercase font-bold tracking-wider text-emerald-400 bg-emerald-950/60 border border-emerald-500/20 px-2 py-0.5 rounded-full shadow-sm">
+                  <span className="rounded-full border border-emerald-500/30 bg-black/60 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">
                     {dominantActionDef.label}
                   </span>
                 )}
               </div>
             ) : (
-              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-bold text-white/60 border border-white/5 uppercase tracking-wider">
+              <span className="rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white/75 backdrop-blur-md">
                 No hand
               </span>
             )}
+            {!pointerAccessTrusted && (
+              <p className="max-w-[28rem] rounded-lg border border-amber-400/30 bg-black/75 px-2 py-1 text-center text-[9px] leading-tight text-amber-200">
+                Allow GestureBridge in System Settings under Privacy &amp; Security, Accessibility, to move and click.
+              </p>
+            )}
 
-            {/* Modifier Hand Gesture */}
             {modifierHand && modifierGestureLabel !== -1 && gestureLabels[modifierGestureLabel] ? (
-              <span className="bg-slate-950/80 backdrop-blur-md px-3 py-0.5 rounded-full text-[10px] font-black border border-white/10 flex items-center gap-1 shadow-lg whitespace-nowrap">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
-                {gestureLabels[modifierGestureLabel] === 'Fist' && '✊ '}
-                {gestureLabels[modifierGestureLabel] === 'Peace' && '✌️ '}
-                {gestureLabels[modifierGestureLabel] === 'Pointing' && '👉 '}
-                {gestureLabels[modifierGestureLabel] === 'Open Palm' && '🖐️ '}
-                {gestureLabels[modifierGestureLabel] === 'Rock' && '🤘 '}
-                {gestureLabels[modifierGestureLabel] === 'Thumb' && '👍 '}
+              <span className="flex items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-black/70 px-3 py-0.5 text-[10px] font-black text-white backdrop-blur-md">
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+                {gestureMark(gestureLabels[modifierGestureLabel])}
                 Mod: {gestureLabels[modifierGestureLabel]}
               </span>
             ) : null}

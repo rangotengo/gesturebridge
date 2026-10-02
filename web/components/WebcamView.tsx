@@ -58,8 +58,10 @@ export default function WebcamView({
   const frameLayoutClasses = isEmbedded
     ? 'absolute inset-0 h-full w-full'
     : isCompact
-      ? 'fixed inset-0 h-full w-full rounded-2xl z-10 border border-white/15 transition-all duration-300'
+      ? 'compact-camera-frame'
       : 'fixed inset-0 h-full w-full z-0';
+  // Compact mode mirrors in CSS so the placeholder icon is not flipped with the feed.
+  const mirrorClass = isCompact ? ' is-mirrored' : ' -scale-x-100';
 
   return (
     <>
@@ -68,7 +70,7 @@ export default function WebcamView({
         optional mirror overlays stay pixel-aligned under object-cover.
       */}
       <div
-        className={`${frameLayoutClasses} -scale-x-100 ${isActive ? 'block' : 'hidden'}`}
+        className={`${frameLayoutClasses}${mirrorClass} ${isActive ? 'block' : 'hidden'}`}
       >
         <video
           ref={videoRef}

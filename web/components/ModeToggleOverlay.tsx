@@ -39,7 +39,7 @@ export default function ModeToggleOverlay({
           gesture: 'Fist',
         }
       : {
-          activeDescription: 'Docked in compact mode at the top center of your screen.',
+          activeDescription: 'Docked as a camera widget at the bottom-right of your screen.',
           icon: '🖱️',
           label: 'Mouse Control',
           inactiveDescription: 'Restored to standard camera view mode.',

@@ -1357,3 +1357,80 @@
     display: none !important;
   }
 }
+
+/*
+  Compact mouse-control window.
+  The Electron window is transparent. This shell is the only opaque surface,
+  so the camera and the HUD share one rounded rect instead of a black frame
+  with a smaller card inside it.
+*/
+html.compact,
+html.compact body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+html.compact nextjs-portal {
+  display: none !important;
+}
+
+.compact-camera-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  border-radius: 22px;
+  background: #0b0b0b;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.compact-camera-frame.is-mirrored {
+  transform: scaleX(-1);
+}
+
+.compact-camera-frame video,
+.compact-camera-frame canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  object-position: center center;
+}
+
+.compact-hud {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-radius: 22px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.compact-hud-scrim {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.compact-hud-scrim.is-top {
+  top: 0;
+  height: 58px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0));
+}
+
+.compact-hud-scrim.is-bottom {
+  bottom: 0;
+  height: 84px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.68), rgba(0, 0, 0, 0));
+}
