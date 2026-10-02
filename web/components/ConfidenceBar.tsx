@@ -28,14 +28,14 @@ export default function ConfidenceBar({ predictions }: ConfidenceBarProps): Reac
           </span>
         </div>
       ) : (
-        predictions.map((pred, index) => {
+        predictions.map((pred) => {
           const pct = Math.round(pred.confidence * 100);
           const isLeft = pred.hand === 'Left';
           const handColor = isLeft ? '#00f0ff' : '#f472b6';
 
           return (
             <div
-              key={`${pred.hand}-${index}`}
+              key={pred.hand}
               className="flex items-center gap-4 w-full animate-fade-in"
               role="progressbar"
               aria-label={`${pred.hand} hand ${pred.gesture} confidence`}

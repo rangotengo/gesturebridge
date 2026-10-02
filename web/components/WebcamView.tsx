@@ -21,6 +21,8 @@ interface WebcamViewProps {
   mirrorOverlay?: React.ReactNode;
   /** Optional callback fired when video metadata loads with the actual resolution */
   onVideoDimensionsChange?: (dimensions: { width: number; height: number }) => void;
+  /** Report every frame with a hand instead of only significant changes. */
+  continuousUpdates?: boolean;
 }
 
 export default function WebcamView({
@@ -33,6 +35,7 @@ export default function WebcamView({
   videoElementRef,
   mirrorOverlay,
   onVideoDimensionsChange,
+  continuousUpdates = false,
 }: WebcamViewProps): React.ReactElement {
   const internalVideoRef = useRef<HTMLVideoElement | null>(null);
   const videoRef = videoElementRef ?? internalVideoRef;
@@ -48,7 +51,7 @@ export default function WebcamView({
     }
   }, [onLandmarksUpdate, onFirstFrame]);
 
-  const { error, retry } = useMediaPipe(videoRef, canvasRef, handleHands, isActive);
+  const { error, retry } = useMediaPipe(videoRef, canvasRef, handleHands, isActive, continuousUpdates);
 
   useEffect(() => {
     onError?.(error);

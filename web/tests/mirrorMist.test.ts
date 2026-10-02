@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getBreathBloomOpacity } from '../features/control/mirrorMist';
 
 /** Mirrors the ease used by MirrorFogOverlay breath blooms. */
 function easeOutCubic(t: number): number {
@@ -15,6 +16,19 @@ function stackedFogDensity(current: number, step = 0.28): number {
 }
 
 describe('mirror mist blow behavior', () => {
+  it('keeps a spread bloom visible long enough to wipe it', () => {
+    expect(getBreathBloomOpacity(0, 1_500)).toBe(0);
+    expect(getBreathBloomOpacity(300, 1_500)).toBe(1);
+    expect(getBreathBloomOpacity(2_000, 1_500)).toBe(1);
+    expect(getBreathBloomOpacity(13_500, 1_500)).toBe(1);
+  });
+
+  it('evaporates gradually over eight seconds after the hold', () => {
+    expect(getBreathBloomOpacity(17_500, 1_500)).toBeCloseTo(0.5);
+    expect(getBreathBloomOpacity(21_500, 1_500)).toBe(0);
+    expect(getBreathBloomOpacity(30_000, 1_500)).toBe(0);
+  });
+
   it('stacks fog density in layers until capped', () => {
     expect(stackedFogDensity(0)).toBeCloseTo(0.28);
     expect(stackedFogDensity(0.28)).toBeCloseTo(0.56);

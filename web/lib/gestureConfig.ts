@@ -1,9 +1,10 @@
-export const PINCH_THRESHOLD       = 0.06;   // normalised distance (0–1)
+export const PINCH_RATIO_THRESHOLD = 0.3;    // thumb–index gap / palm length to start a pinch
+export const PINCH_RELEASE_FACTOR  = 1.4;    // pinch ends above threshold × this (hysteresis)
 export const SCROLL_INTERVAL_MS    = 120;    // ms between scroll ticks
 export const SCROLL_AMOUNT         = 3;      // scroll ticks per event
 export const ZOOM_THRESHOLD        = 0.05;   // min inter-hand delta to trigger zoom
 export const ZOOM_INTERVAL_MS      = 100;    // ms between zoom events
 export const ZOOM_SCROLL_AMOUNT    = 3;      // scroll ticks per zoom event
 export const CLICK_COOLDOWN_MS     = 400;    // Peace right-click cooldown
-export const PINCH_COOLDOWN_MS     = 500;    // Pinch left-click cooldown
+export const PINCH_COOLDOWN_MS     = 200;    // Pinch left-click cooldown; short enough for OS double-click
 export const MIRRORED_FEED         = true;   // flip L/R hand labels from MediaPipe

@@ -10,6 +10,10 @@ export function useTwoHandControl(
 ): { isFrozen: boolean; isDragging: boolean } {
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
+  const mouseModeActiveRef = useRef(mouseModeActive);
+  useEffect(() => {
+    mouseModeActiveRef.current = mouseModeActive;
+  }, [mouseModeActive]);
 
   const prevModifierGestureLabelRef = useRef<number | null>(null);
   const lastMiddleClickTimeRef = useRef<number>(0);
@@ -80,6 +84,8 @@ export function useTwoHandControl(
     if (typeof window === 'undefined') return;
 
     const handleWindowBlur = (): void => {
+      // Pressing into another app always blurs this window during mouse control.
+      if (mouseModeActiveRef.current) return;
       stopDragging();
     };
 

@@ -19,14 +19,12 @@ import { assignHandRoles } from '@/hooks/useHandRoles';
 import { useTwoHandControl } from '@/hooks/useTwoHandControl';
 import { useTwoHandZoom } from '@/hooks/useTwoHandZoom';
 import { useAdminSession } from '@/hooks/useAdminSession';
-import { useBlowDetection } from '@/hooks/useBlowDetection';
-import { useFacePucker } from '@/hooks/useFacePucker';
+import { useMirrorEffects } from '@/hooks/useMirrorEffects';
 import type { ControlMode } from '@/features/control/modes';
 import { mapRawLandmarkToMirroredCoverViewport } from '@/features/control/pointerTracking';
 import { saveCollectedSamples, trainDatasetModel } from '@/features/datasets/queries';
 import CalibrationModal from '@/components/CalibrationModal';
 import ProfileSelectorModal from '@/components/ProfileSelectorModal';
-import { getPinchDistance } from '@/hooks/usePinchDetector';
 import { loadCalibrationSettings, CalibrationSettings } from '@/lib/calibration';
 import { loadActiveProfile, GestureProfile, AVAILABLE_ACTIONS } from '@/lib/gestureProfiles';
 
@@ -242,16 +240,12 @@ function HomePage(): React.ReactElement {
     onToggle: () => toggleInteractiveMode('mirror'),
     enabled: isElectron && !isMouseModeActive,
   });
-  const mirrorExperienceEnabled = isElectron && isMirrorModeActive && isCameraOn;
-  const { microphoneStatus } = useBlowDetection({
-    enabled: mirrorExperienceEnabled,
-    onBlow: triggerFogBurst,
-  });
-  useFacePucker({
-    videoRef: cameraVideoRef,
-    enabled: mirrorExperienceEnabled && microphoneStatus === 'unavailable',
-    onPucker: triggerFogBurst,
-  });
+  const mirrorExperienceEnabled = isMirrorModeActive && isCameraOn;
+  const { microphoneStatus, face: mirrorFace } = useMirrorEffects(
+    mirrorExperienceEnabled,
+    cameraVideoRef,
+    triggerFogBurst
+  );
   // Raw MediaPipe coords — MirrorFogOverlay lives inside the CSS-mirrored camera plane.
   const mirrorFingertipPosition =
     isMirrorModeActive && currentGestureLabel === 0 && dominantHand?.landmarks[8]
@@ -295,7 +289,11 @@ function HomePage(): React.ReactElement {
     bothHandsActive
   );
 
-  useMouseControl(dominantHand, isMouseModeActive, currentGestureLabel, isFrozen);
+  const cameraAspect =
+    videoDimensions.width > 0 && videoDimensions.height > 0
+      ? videoDimensions.width / videoDimensions.height
+      : 16 / 9;
+  useMouseControl(dominantHand, isMouseModeActive, currentGestureLabel, isFrozen, cameraAspect);
 
   const handleCameraToggle = (): void => {
     const nextCameraState = !isCameraOn;
@@ -492,6 +490,7 @@ function HomePage(): React.ReactElement {
         isCompact={isMouseModeActive}
         videoElementRef={cameraVideoRef}
         onVideoDimensionsChange={setVideoDimensions}
+        continuousUpdates={isMouseModeActive || isMirrorModeActive || isCalibrationOpen}
         mirrorOverlay={
           mirrorExperienceEnabled ? (
             <MirrorFogOverlay
@@ -504,6 +503,28 @@ function HomePage(): React.ReactElement {
           ) : null
         }
       />
+
+      {isMirrorModeActive && (
+        <div className="fixed top-36 right-4 z-40 max-w-xs rounded-xl border border-white/10 bg-neutral-950/85 p-4 text-sm text-white backdrop-blur-sm">
+          <p>Blow toward your microphone or hold a mouth pucker to add mist. Point and move your index finger to wipe it.</p>
+          <p className="mt-2 text-xs text-neutral-300" role="status">
+            {!isCameraOn ? 'Turn on the camera to use Mirror mode.' : (
+              <>
+                {microphoneStatus === 'requesting' ? 'Waiting for microphone access. ' :
+                  microphoneStatus === 'available' ? 'Microphone listening. ' :
+                    microphoneStatus === 'unavailable' ? 'Microphone unavailable. ' : 'Starting microphone. '}
+                {mirrorFace.isLoading ? 'Starting mouth detection…' :
+                  mirrorFace.isAvailable ? 'Mouth detection ready.' :
+                    mirrorFace.error ? 'Mouth detection unavailable. Use Fog mirror below.' : ''}
+              </>
+            )}
+          </p>
+          <button type="button" disabled={!mirrorExperienceEnabled} onClick={triggerFogBurst}
+            className="mt-3 rounded-lg bg-white/15 px-3 py-2 hover:bg-white/25 disabled:opacity-40">
+            Fog mirror
+          </button>
+        </div>
+      )}
 
       {/* ── Mode Toggle Gesture Animations Overlay (Electron / desktop only) ── */}
       {isElectron && (
@@ -872,7 +893,8 @@ function HomePage(): React.ReactElement {
       {isCalibrationOpen && (
         <CalibrationModal
           onClose={() => setIsCalibrationOpen(false)}
-          currentPinchDistance={dominantHand ? getPinchDistance(dominantHand.landmarks) : null}
+          handLandmarks={dominantHand?.landmarks ?? null}
+          cameraAspect={cameraAspect}
         />
       )}
       {isProfileModalOpen && (

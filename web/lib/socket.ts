@@ -4,6 +4,7 @@ import {
   configuredSocketOrigins,
   consumeSocketEventBudget,
   isAllowedSocketOrigin,
+  isAllowedSocketRequest,
   isValidGestureTelemetryPayload,
   isValidModeTogglePayload,
   type EventWindow,
@@ -36,14 +37,17 @@ export function setupSocketIO(httpServer: HTTPServer): SocketIOServer {
   ioInstance = new SocketIOServer(httpServer, {
     cors: {
       origin(origin, callback) {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
         callback(null, isAllowedSocketOrigin(origin, allowedOrigins));
       },
       methods: ['GET', 'POST'],
       credentials: true,
     },
     allowRequest(request, callback) {
-      const origin = request.headers.origin;
-      callback(null, isAllowedSocketOrigin(origin, allowedOrigins));
+      callback(null, isAllowedSocketRequest(request, allowedOrigins));
     },
     maxHttpBufferSize: SOCKET_MAX_BUFFER_BYTES,
     perMessageDeflate: false,

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { HandData } from '@/ml/gestureUtils';
-import { isPinching } from '@/hooks/usePinchDetector';
-import { getMirroredIndexTipPosition, type ScreenSpace } from '@/features/control/pointerTracking';
+import { getPinchRatio } from '@/hooks/usePinchDetector';
+import { getMirroredTrackingPoint, type ScreenSpace } from '@/features/control/pointerTracking';
 import {
+  clearHeldButton,
   createMouseControlState,
   stepMouseControl,
   type MouseCommand,
@@ -10,6 +11,7 @@ import {
 import {
   loadCalibrationSettings,
   applyCalibrationMapping,
+  pointerFilterParams,
   type CalibrationSettings,
 } from '@/lib/calibration';
 import {
@@ -80,7 +82,8 @@ export function useMouseControl(
   dominantHand: HandData | null,
   isMouseModeActive: boolean,
   currentGestureLabel: number,
-  isFrozen: boolean
+  isFrozen: boolean,
+  cameraAspect: number
 ): void {
   const controlStateRef = useRef(createMouseControlState());
   const screenSizeRef = useRef<ScreenSpace>(DEFAULT_SCREEN);
@@ -88,6 +91,7 @@ export function useMouseControl(
   // Settings
   const [calibration, setCalibration] = useState<CalibrationSettings>(loadCalibrationSettings);
   const [profile, setProfile] = useState<GestureProfile>(loadActiveProfile);
+  const filterParams = useMemo(() => pointerFilterParams(calibration), [calibration]);
 
   useEffect(() => {
     const handleSettingsChange = (): void => {
@@ -131,44 +135,36 @@ export function useMouseControl(
     };
   }, [isMouseModeActive]);
 
-  // Sync drag release from desktop safety events (e.g. window blur, emergency stop)
+  // Sync drag release from desktop safety events (e.g. deadman timeout, emergency stop)
   useEffect(() => {
     if (!window.electronAPI?.onDragReleased) return;
     const unsubscribe = window.electronAPI.onDragReleased((data) => {
       if (!data.buttons.includes('left')) return;
-      const state = controlStateRef.current;
-      controlStateRef.current = {
-        ...state,
-        pinchStartedAt: null,
-        pinchArmed: false,
-        pinchDragging: false,
-        gestureDragging: false,
-        leftDown: false,
-      };
+      controlStateRef.current = clearHeldButton(controlStateRef.current);
     });
     return unsubscribe;
   }, []);
 
   useEffect(() => {
     const landmarks = dominantHand?.landmarks;
-    const rawPos = landmarks ? getMirroredIndexTipPosition(landmarks) : null;
+    const rawPos = landmarks ? getMirroredTrackingPoint(landmarks, calibration.trackingPoint) : null;
     const pointer = rawPos ? applyCalibrationMapping(rawPos, calibration) : null;
     const mappedAction: GestureActionType | null =
       currentGestureLabel >= 0 ? (profile.mappings[currentGestureLabel] ?? null) : null;
     const gestureAction = mappedAction && mappedAction !== 'none' ? mappedAction : null;
 
     const step = stepMouseControl(controlStateRef.current, {
-      now: Date.now(),
+      now: performance.now(),
       enabled: isMouseModeActive,
       tracking: Boolean(pointer),
       externallyFrozen: isFrozen,
       movementEnabled: Object.values(profile.mappings).includes('pointer_move'),
-      pinching: landmarks ? isPinching(landmarks, calibration.pinchThreshold) : false,
+      pinchRatio: landmarks ? getPinchRatio(landmarks, cameraAspect) : null,
+      pinchThreshold: calibration.pinchRatio,
       gestureAction,
       pointer,
       screen: screenSizeRef.current,
-      smoothingAlpha: calibration.smoothingAlpha,
-      deadzoneRadius: calibration.deadzoneRadius,
+      filter: filterParams,
     });
     controlStateRef.current = step.state;
 
@@ -176,5 +172,5 @@ export function useMouseControl(
     for (const command of step.commands) {
       dispatchMouseCommand(command);
     }
-  }, [dominantHand, isMouseModeActive, currentGestureLabel, isFrozen, calibration, profile]);
+  }, [dominantHand, isMouseModeActive, currentGestureLabel, isFrozen, calibration, profile, filterParams, cameraAspect]);
 }

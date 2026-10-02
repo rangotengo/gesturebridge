@@ -1,4 +1,5 @@
 import type { Landmark } from '@/ml/gestureUtils';
+import type { TrackingPoint } from '@/lib/calibration';
 
 export interface NormalizedPointerPosition {
   /** Camera feed is mirrored, so X is normalized in rendered screen space. */
@@ -18,9 +19,8 @@ export interface ScreenSpace extends Size2D {
 }
 
 /**
- * Shared point-to-screen mapping for OS cursor control.
  * MediaPipe Hand landmark 8 is the index fingertip; X is mirrored to match the
- * CSS-mirrored camera feed. Hand-update filtering stays owned by useMediaPipe.
+ * CSS-mirrored camera feed.
  */
 export function getMirroredIndexTipPosition(
   landmarks: readonly Landmark[]
@@ -33,6 +33,35 @@ export function getMirroredIndexTipPosition(
   return {
     x: 1 - fingertip.x,
     y: fingertip.y,
+  };
+}
+
+/** Index, middle, ring, and pinky knuckles (MCP joints). */
+const PALM_KNUCKLES = [5, 9, 13, 17] as const;
+
+/**
+ * The knuckle line stays put while fingers curl, so pinching or switching
+ * gestures does not drag the cursor. The fingertip follows finer finger
+ * motion but jumps whenever the index finger bends.
+ */
+export function getMirroredTrackingPoint(
+  landmarks: readonly Landmark[],
+  trackingPoint: TrackingPoint
+): NormalizedPointerPosition | null {
+  if (trackingPoint === 'fingertip') return getMirroredIndexTipPosition(landmarks);
+
+  let sumX = 0;
+  let sumY = 0;
+  for (const index of PALM_KNUCKLES) {
+    const knuckle = landmarks[index];
+    if (!knuckle || !Number.isFinite(knuckle.x) || !Number.isFinite(knuckle.y)) return null;
+    sumX += knuckle.x;
+    sumY += knuckle.y;
+  }
+
+  return {
+    x: 1 - sumX / PALM_KNUCKLES.length,
+    y: sumY / PALM_KNUCKLES.length,
   };
 }
 
@@ -90,37 +119,69 @@ export function mapPointerToScreen(
   };
 }
 
+export interface PointerFilterParams {
+  /** Hz. Cutoff while the hand is still; lower is steadier but lags more. */
+  minCutoff: number;
+  /** Extra cutoff per unit of speed (normalized screens per second). */
+  beta: number;
+  /** Hz. Cutoff for the speed estimate itself. */
+  derivativeCutoff: number;
+}
+
+export interface PointerFilterState {
+  x: number;
+  y: number;
+  /** Filtered velocity in normalized units per second. */
+  dx: number;
+  dy: number;
+  t: number;
+}
+
+/** Samples closer than this are treated as duplicates of the same camera frame. */
+const MIN_FILTER_STEP_MS = 4;
+
+function smoothingFactor(elapsedSeconds: number, cutoffHz: number): number {
+  const tau = 1 / (2 * Math.PI * Math.max(cutoffHz, 1e-3));
+  return 1 / (1 + tau / elapsedSeconds);
+}
+
 /**
- * One-euro-free exponential smoothing with a tremor deadzone.
- * Distance is measured from the last emitted point, so a slow drift still
- * breaks out of the deadzone once the accumulated travel exceeds it.
- * Higher `smoothingAlpha` follows the hand more closely.
+ * One Euro filter (Casiez et al., CHI 2012) over a 2D point.
+ * A still hand gets a low cutoff, which removes landmark jitter. A fast hand
+ * raises the cutoff, so the cursor keeps up without the lag a fixed EMA adds.
+ * Both axes share one cutoff from the 2D speed so diagonal moves do not bend.
  */
-export function smoothPointer(
-  next: NormalizedPointerPosition,
-  previous: NormalizedPointerPosition | null,
-  smoothingAlpha: number,
-  deadzoneRadius: number
-): NormalizedPointerPosition {
-  if (
-    !previous ||
-    !Number.isFinite(previous.x) ||
-    !Number.isFinite(previous.y) ||
-    !Number.isFinite(next.x) ||
-    !Number.isFinite(next.y)
-  ) {
-    return { x: next.x, y: next.y };
+export function filterPointer(
+  previous: PointerFilterState | null,
+  sample: NormalizedPointerPosition,
+  now: number,
+  params: PointerFilterParams
+): PointerFilterState {
+  if (!Number.isFinite(sample.x) || !Number.isFinite(sample.y)) {
+    return previous ? { ...previous } : { x: 0.5, y: 0.5, dx: 0, dy: 0, t: now };
+  }
+  if (!previous) {
+    return { x: sample.x, y: sample.y, dx: 0, dy: 0, t: now };
   }
 
-  const dx = next.x - previous.x;
-  const dy = next.y - previous.y;
-  if (Math.hypot(dx, dy) < Math.max(0, deadzoneRadius)) {
-    return previous;
-  }
+  const elapsedMs = now - previous.t;
+  if (elapsedMs < MIN_FILTER_STEP_MS) return { ...previous };
+  const elapsed = elapsedMs / 1000;
 
-  const alpha = Math.min(1, Math.max(0, smoothingAlpha));
+  const derivativeAlpha = smoothingFactor(elapsed, params.derivativeCutoff);
+  const rawDx = (sample.x - previous.x) / elapsed;
+  const rawDy = (sample.y - previous.y) / elapsed;
+  const dx = previous.dx + derivativeAlpha * (rawDx - previous.dx);
+  const dy = previous.dy + derivativeAlpha * (rawDy - previous.dy);
+
+  const cutoff = params.minCutoff + params.beta * Math.hypot(dx, dy);
+  const alpha = smoothingFactor(elapsed, cutoff);
+
   return {
-    x: previous.x + dx * alpha,
-    y: previous.y + dy * alpha,
+    x: previous.x + alpha * (sample.x - previous.x),
+    y: previous.y + alpha * (sample.y - previous.y),
+    dx,
+    dy,
+    t: now,
   };
 }

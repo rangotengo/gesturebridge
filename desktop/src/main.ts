@@ -35,6 +35,7 @@ import {
 
 interface RobotModule {
   moveMouse(x: number, y: number): void;
+  dragMouse(x: number, y: number, button?: 'left' | 'right' | 'middle'): void;
   mouseClick(button?: 'left' | 'right' | 'middle', double?: boolean): void;
   mouseToggle(action: 'down' | 'up', button?: 'left' | 'right' | 'middle'): void;
   scrollMouse(x: number, y: number): void;
@@ -173,6 +174,8 @@ const CLICK_SETTLE_MS = 20;
 const CLICK_HOLD_MS = 45;
 
 let lastCommandedPoint: { x: number; y: number } | null = null;
+let deferredPoint: { x: number; y: number } | null = null;
+let compactMode = false;
 let accessibilityGranted = process.platform !== 'darwin';
 let accessibilityWarningLogged = false;
 let syntheticClickTimer: NodeJS.Timeout | null = null;
@@ -207,19 +210,49 @@ function cancelSyntheticClick(releaseIfDown: boolean): void {
 
   const pending = syntheticClick;
   syntheticClick = null;
-  if (!releaseIfDown || pending?.phase !== 'down') return;
+  if (releaseIfDown && pending?.phase === 'down') {
+    try {
+      getRobot()?.mouseToggle('up', pending.button);
+    } catch (err) {
+      console.error('Error releasing in-flight mouse click:', err);
+    }
+  }
+  flushDeferredPoint();
+}
 
+function postPointer(robot: RobotModule, point: { x: number; y: number }): void {
+  lastCommandedPoint = point;
+  // macOS apps track a drag only from "dragged" events. A plain move with the
+  // button down is ignored by Finder, text selection, and window dragging.
+  const held = heldMouseButtons.getHeldButtons()[0];
+  if (held) {
+    robot.dragMouse(point.x, point.y, held);
+  } else {
+    robot.moveMouse(point.x, point.y);
+  }
+}
+
+function flushDeferredPoint(): void {
+  const point = deferredPoint;
+  deferredPoint = null;
+  if (!point) return;
+  const robot = getRobot();
+  if (!robot) return;
   try {
-    getRobot()?.mouseToggle('up', pending.button);
+    postPointer(robot, point);
   } catch (err) {
-    console.error('Error releasing in-flight mouse click:', err);
+    console.error('Error applying deferred pointer move:', err);
   }
 }
 
 function commandPointerMove(robot: RobotModule, x: number, y: number): void {
   const clamped = clampPointToDisplay(x, y);
-  lastCommandedPoint = clamped;
-  robot.moveMouse(clamped.x, clamped.y);
+  if (syntheticClick) {
+    // Moving between press and release would turn the click into a tiny drag.
+    deferredPoint = clamped;
+    return;
+  }
+  postPointer(robot, clamped);
 }
 
 function commandPointerClick(robot: RobotModule, button: MouseButton): void {
@@ -267,6 +300,7 @@ function commandPointerClick(robot: RobotModule, button: MouseButton): void {
         } catch (err) {
           console.error('Error releasing mouse click:', err);
         }
+        flushDeferredPoint();
       }, CLICK_HOLD_MS);
     }, CLICK_SETTLE_MS);
   }, CLICK_SETTLE_MS);
@@ -375,6 +409,7 @@ const deadmanTimer = new DeadmanTimer(DEADMAN_TIMEOUT_MS, () => {
 });
 
 function restoreNormalBounds(): void {
+  compactMode = false;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try {
     mainWindow.setAlwaysOnTop(false);
@@ -409,8 +444,9 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
-    frame: false,
-    transparent: true,
+    frame: true,
+    transparent: false,
+    titleBarStyle: 'default',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -419,6 +455,8 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
       webSecurity: true,
       allowRunningInsecureContent: false,
       webviewTag: false,
+      // Mouse control runs while other apps have focus; throttled timers stall the camera loop.
+      backgroundThrottling: false,
       additionalArguments: [`--app-token=${sessionAuthToken}`],
     },
   });
@@ -471,6 +509,10 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
   });
 
   mainWindow.on('blur', () => {
+    // In mouse control every press into another app blurs this window, so a
+    // blur release would end each drag as it starts. The deadman timer and
+    // the emergency shortcut still cover that mode.
+    if (compactMode) return;
     releaseHeldMouseButtons('window-blur');
   });
 
@@ -737,15 +779,18 @@ ipcMain.on('window:set-compact', (event, payload: unknown) => {
         normalBounds = mainWindow.getBounds();
       }
       const { workArea } = screen.getPrimaryDisplay();
-      // 16:9 matches the camera so object-cover does not crop the face.
-      const width = 480;
-      const height = 270;
+      // Keep the camera content at 16:9, allowing space for the native frame.
+      const [outerWidth, outerHeight] = mainWindow.getSize();
+      const [contentWidth, contentHeight] = mainWindow.getContentSize();
+      const width = 480 + outerWidth - contentWidth;
+      const height = 270 + outerHeight - contentHeight;
       const x = workArea.x + workArea.width - width - 16;
       const y = workArea.y + workArea.height - height - 16;
 
       mainWindow.setAlwaysOnTop(true, 'floating');
       mainWindow.setBounds({ x, y, width, height });
       mainWindow.setResizable(false);
+      compactMode = true;
     } else {
       restoreNormalBounds();
     }

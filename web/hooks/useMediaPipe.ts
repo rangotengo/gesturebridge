@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Landmark, Handedness, HandData } from '@/ml/gestureUtils';
+import { selectDistinctHands, type HandDetection } from '@/features/control/handDetections';
 
 // ---- MediaPipe global types ----
 declare global {
@@ -221,7 +222,13 @@ export function useMediaPipe(
   videoRef: React.RefObject<HTMLVideoElement | null>,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   onHandsUpdate: (hands: HandData[], rawLandmarks?: Landmark[][], rawHandedness?: Handedness[]) => void,
-  enabled = true
+  enabled = true,
+  /**
+   * Deliver every frame with a hand, not only frames that moved past the
+   * change threshold. Cursor smoothing needs a steady sample stream to settle
+   * on the final position after the hand stops.
+   */
+  continuous = false
 ): {
   isLoading: boolean;
   error: string | null;
@@ -239,6 +246,11 @@ export function useMediaPipe(
   useEffect(() => {
     onHandsUpdateRef.current = onHandsUpdate;
   }, [onHandsUpdate]);
+
+  const continuousRef = useRef(continuous);
+  useEffect(() => {
+    continuousRef.current = continuous;
+  }, [continuous]);
 
   const retry = useCallback((): void => {
     setError(null);
@@ -357,20 +369,18 @@ export function useMediaPipe(
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-          const rawLandmarks = results.multiHandLandmarks;
-          const rawHandedness = results.multiHandedness?.map((h) => mirrorHandedness(h.label));
-
-          const detectedHands: HandData[] = [];
+          const candidates: HandDetection[] = (results.multiHandLandmarks ?? []).map((landmarks, index) => ({
+            landmarks,
+            handedness: mirrorHandedness(results.multiHandedness?.[index]?.label ?? 'Left'),
+            score: results.multiHandedness?.[index]?.score ?? 0,
+          }));
+          const detectedHands = selectDistinctHands(candidates);
+          const rawLandmarks = detectedHands.map((hand) => hand.landmarks);
+          const rawHandedness = detectedHands.map((hand) => hand.handedness);
           const currentHandSet = new Set<Handedness>();
 
-          if (rawLandmarks && rawLandmarks.length > 0) {
-            for (let i = 0; i < rawLandmarks.length; i++) {
-              const landmarks = rawLandmarks[i];
-              if (!landmarks || landmarks.length === 0) continue;
-
-              const handednessLabel = results.multiHandedness?.[i]?.label ?? 'Left';
-              const handedness = mirrorHandedness(handednessLabel);
-              detectedHands.push({ handedness, landmarks });
+          if (detectedHands.length > 0) {
+            for (const { landmarks, handedness } of detectedHands) {
               currentHandSet.add(handedness);
 
               const colors = HAND_COLORS[handedness] ?? FALLBACK_COLORS;
@@ -431,7 +441,7 @@ export function useMediaPipe(
             changed = true;
           }
 
-          if (changed) {
+          if (changed || (continuousRef.current && detectedHands.length > 0)) {
             onHandsUpdateRef.current(detectedHands, rawLandmarks, rawHandedness);
           }
 

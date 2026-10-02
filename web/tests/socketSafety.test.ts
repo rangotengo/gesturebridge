@@ -6,6 +6,7 @@ import {
   configuredSocketOrigins,
   consumeSocketEventBudget,
   isAllowedSocketOrigin,
+  isAllowedSocketRequest,
   isValidGestureTelemetryPayload,
   isValidModeTogglePayload,
 } from '../lib/socketSafety';
@@ -28,6 +29,43 @@ describe('socket origin policy', () => {
     expect(() => configuredSocketOrigins({ SOCKET_ALLOWED_ORIGINS: 'not-a-url' })).toThrow(
       'Invalid SOCKET_ALLOWED_ORIGINS entry: not-a-url'
     );
+  });
+
+  it('validates socket handshake requests across origin, referer, and host fallback', () => {
+    const origins = configuredSocketOrigins({ PORT: '3000' });
+
+    // Explicit Origin header
+    expect(
+      isAllowedSocketRequest({ headers: { origin: 'http://localhost:3000' } }, origins)
+    ).toBe(true);
+    expect(
+      isAllowedSocketRequest({ headers: { origin: 'https://evil.example' } }, origins)
+    ).toBe(false);
+
+    // Same-origin GET requests without Origin header, but with Referer
+    expect(
+      isAllowedSocketRequest(
+        { headers: { referer: 'http://localhost:3000/dashboard' } },
+        origins
+      )
+    ).toBe(true);
+    expect(
+      isAllowedSocketRequest(
+        { headers: { referer: 'https://evil.example/attack' } },
+        origins
+      )
+    ).toBe(false);
+    expect(
+      isAllowedSocketRequest({ headers: { referer: 'not-a-valid-url' } }, origins)
+    ).toBe(false);
+
+    // Fallback to Host header when neither Origin nor Referer is present
+    expect(isAllowedSocketRequest({ headers: { host: 'localhost:3000' } }, origins)).toBe(true);
+    expect(isAllowedSocketRequest({ headers: { host: '127.0.0.1:3000' } }, origins)).toBe(true);
+    expect(isAllowedSocketRequest({ headers: { host: 'evil.example' } }, origins)).toBe(false);
+
+    // Empty or absent headers
+    expect(isAllowedSocketRequest({ headers: {} }, origins)).toBe(false);
   });
 });
 

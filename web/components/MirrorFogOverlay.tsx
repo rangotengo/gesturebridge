@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { getBreathBloomOpacity } from '@/features/control/mirrorMist';
 
 export interface MirrorFogPoint {
   /** Normalized video coordinates: 0..1 in raw MediaPipe space (pre CSS mirror). */
@@ -254,7 +255,9 @@ export default function MirrorFogOverlay({
 
     const drawBlooms = (now: number, activeDensity: number): number => {
       bloomContext.clearRect(0, 0, width, height);
-      const blooms = bloomsRef.current.filter((bloom) => now - bloom.bornAt < bloom.durationMs + 400);
+      const blooms = bloomsRef.current.filter((bloom) =>
+        now <= bloom.bornAt || getBreathBloomOpacity(now - bloom.bornAt, bloom.durationMs) > 0
+      );
       bloomsRef.current = blooms;
 
       let peakBloom = 0;
@@ -265,7 +268,8 @@ export default function MirrorFogOverlay({
         const radiusY = bloom.peakRadius * eased * height * 1.35;
         const cx = bloom.originX * width;
         const cy = bloom.originY * height;
-        const opacity = (0.55 + activeDensity * 0.35) * (progress < 0.2 ? progress / 0.2 : 1);
+        const opacity = (0.55 + activeDensity * 0.35) *
+          getBreathBloomOpacity(now - bloom.bornAt, bloom.durationMs);
         peakBloom = Math.max(peakBloom, eased * opacity);
 
         const gradient = bloomContext.createRadialGradient(

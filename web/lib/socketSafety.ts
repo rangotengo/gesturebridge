@@ -14,6 +14,10 @@ export interface GestureTelemetryPayload {
   confidence?: number;
 }
 
+export interface SocketHandshakeLike {
+  headers: Record<string, string | string[] | undefined>;
+}
+
 type Environment = Readonly<Record<string, string | undefined>>;
 
 export function configuredSocketOrigins(environment: Environment = process.env): Set<string> {
@@ -40,6 +44,33 @@ export function configuredSocketOrigins(environment: Environment = process.env):
 
 export function isAllowedSocketOrigin(origin: unknown, allowedOrigins: ReadonlySet<string>): boolean {
   return typeof origin === 'string' && allowedOrigins.has(origin);
+}
+
+export function isAllowedSocketRequest(
+  request: SocketHandshakeLike,
+  allowedOrigins: ReadonlySet<string>
+): boolean {
+  const origin = typeof request.headers.origin === 'string' ? request.headers.origin : undefined;
+  if (origin !== undefined) {
+    return isAllowedSocketOrigin(origin, allowedOrigins);
+  }
+
+  const referer = typeof request.headers.referer === 'string' ? request.headers.referer : undefined;
+  if (referer !== undefined) {
+    try {
+      const refererOrigin = new URL(referer).origin;
+      return allowedOrigins.has(refererOrigin);
+    } catch {
+      return false;
+    }
+  }
+
+  const host = typeof request.headers.host === 'string' ? request.headers.host : undefined;
+  if (host !== undefined) {
+    return allowedOrigins.has(`http://${host}`) || allowedOrigins.has(`https://${host}`);
+  }
+
+  return false;
 }
 
 export function consumeSocketEventBudget(
