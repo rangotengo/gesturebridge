@@ -76,7 +76,7 @@ export default function GestureDisplay({
           </p>
         </div>
       ) : (
-        predictions.map((pred, index) => {
+        predictions.map((pred) => {
           const isDominant =
             dominantHandName !== undefined
               ? dominantHandName !== null
@@ -91,8 +91,8 @@ export default function GestureDisplay({
 
           let displayGesture = '—';
           if (hasGesture && pred.gesture) {
-            const icon = GESTURE_ICONS[pred.gesture] ?? '✋';
-            displayGesture = `${icon} ${pred.gesture}`;
+            const icon = GESTURE_ICONS[pred.gesture];
+            displayGesture = icon ? `${icon} ${pred.gesture}` : pred.gesture;
           }
 
           let activeAction = 'Ready';
@@ -117,7 +117,7 @@ export default function GestureDisplay({
 
           return (
             <div
-              key={`${pred.hand}-${index}`}
+              key={pred.hand}
               className="bg-black/80 backdrop-blur-md border border-white/10 rounded-xl px-8 py-4 text-center shadow-2xl transition-all duration-300 min-w-[220px] flex flex-col justify-between"
               style={{
                 borderLeft: `4px solid ${handColor}`,
