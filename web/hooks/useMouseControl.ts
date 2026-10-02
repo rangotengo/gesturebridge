@@ -50,6 +50,7 @@ export function useMouseControl(
   const pinchStartTimeRef = useRef(0);
   const isDraggingRef = useRef(false);
   const lastRawPositionRef = useRef<{ x: number; y: number } | null>(null);
+  const screenSizeRef = useRef<{ width: number; height: number }>({ width: 1920, height: 1080 });
 
   // Settings
   const [calibration, setCalibration] = useState<CalibrationSettings>(loadCalibrationSettings);
@@ -69,6 +70,32 @@ export function useMouseControl(
       window.removeEventListener('profile-updated', handleSettingsChange);
     };
   }, []);
+
+  // Fetch and cache screen dimensions for high-frequency cursor mapping
+  useEffect(() => {
+    if (!window.electronAPI?.getScreenSize) return;
+
+    let mounted = true;
+    const fetchScreenSize = (): void => {
+      window.electronAPI
+        ?.getScreenSize()
+        .then((size) => {
+          if (mounted && size && size.width > 0 && size.height > 0) {
+            screenSizeRef.current = size;
+          }
+        })
+        .catch((err: unknown) => {
+          console.warn('Failed to query screen size for mouse control:', err);
+        });
+    };
+
+    fetchScreenSize();
+    window.addEventListener('resize', fetchScreenSize);
+    return () => {
+      mounted = false;
+      window.removeEventListener('resize', fetchScreenSize);
+    };
+  }, [isMouseModeActive]);
 
   // Sync drag release from desktop safety events (e.g. window blur, emergency stop)
   useEffect(() => {
@@ -102,15 +129,11 @@ export function useMouseControl(
     const pointerPos = applyCalibrationMapping(rawPos, calibration);
     lastRawPositionRef.current = rawPos;
 
-    // 1. Move Mouse
+    // 1. Move Mouse using cached screen dimensions (zero latency, within IPC rate limits)
     if (now - lastEventTime.current >= THROTTLE_MS) {
-      window.electronAPI.getScreenSize().then((screenSize) => {
-        const coords = mapPointerToScreen(pointerPos, screenSize);
-        window.electronAPI?.mouseMove(coords.x, coords.y);
-        lastEventTime.current = now;
-      }).catch((err: unknown) => {
-        console.error('Failed to get screen size for mouse control:', err);
-      });
+      const coords = mapPointerToScreen(pointerPos, screenSizeRef.current);
+      window.electronAPI.mouseMove(coords.x, coords.y);
+      lastEventTime.current = now;
     }
 
     // 2. Pinch Detection for Dragging

@@ -3,9 +3,9 @@ import * as crypto from 'crypto';
 export const IPC_RATE_LIMIT_WINDOW_MS = 1_000;
 export const MAX_ABSOLUTE_COORDINATE = 100_000;
 
+export type MouseAction = 'down' | 'up';
 export type MouseButton = 'left' | 'right' | 'middle';
 export type MouseToggleButton = 'left' | 'right';
-export type MouseAction = 'down' | 'up';
 export type ScrollDirection = 'up' | 'down';
 export type ZoomDirection = 'in' | 'out';
 
@@ -14,12 +14,7 @@ export interface PointPayload {
   y: number;
 }
 
-export interface IpcRateLimitEntry {
-  count: number;
-  windowStartedAt: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
@@ -57,6 +52,8 @@ export const ALLOWED_MEDIA_PERMISSIONS = new Set([
   'microphone',
   'video-capture',
   'audio-capture',
+  'clipboard-read',
+  'clipboard-sanitized-write',
 ]);
 
 export function isAllowedMediaPermission(permission: string): boolean {
@@ -122,14 +119,14 @@ export function isTrustedOriginUrl(senderUrl: string, trustedOrigin: string): bo
  * This limiter is process-local; deployment-wide limits belong at the web-server boundary.
  */
 export class IpcRateLimiter {
-  private readonly entries = new Map<string, IpcRateLimitEntry>();
+  private readonly entries = new Map<string, { count: number; windowStartedAt: number }>();
 
   public constructor(
-    private readonly windowMs = IPC_RATE_LIMIT_WINDOW_MS,
-    private readonly maxEntries = 1_000
+    private readonly windowMs: number = IPC_RATE_LIMIT_WINDOW_MS,
+    private readonly maxEntries: number = 256
   ) {}
 
-  public consume(senderId: number, channel: string, limit: number, now = Date.now()): boolean {
+  public consume(senderId: number, channel: string, limit: number, now: number = Date.now()): boolean {
     const key = `${senderId}:${channel}`;
     const current = this.entries.get(key);
 
@@ -139,7 +136,10 @@ export class IpcRateLimiter {
       return true;
     }
 
-    if (current.count >= limit) return false;
+    if (current.count >= limit) {
+      return false;
+    }
+
     current.count += 1;
     return true;
   }
@@ -195,13 +195,12 @@ export class DeadmanTimer {
   }
 
   public cancel(): void {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = null;
   }
 
-  public isActive(): boolean {
+  public isRunning(): boolean {
     return this.timer !== null;
   }
 }

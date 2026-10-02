@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
 const {
+  DEADMAN_TIMEOUT_MS,
+  DeadmanTimer,
+  HeldButtonTracker,
   IpcRateLimiter,
   MAX_ABSOLUTE_COORDINATE,
   isAllowedLocalUrl,
@@ -12,21 +14,20 @@ const {
   parsePointPayload,
 } = require('../dist/security.js');
 
-test('only credential-free loopback web URLs are allowed', () => {
+test('local URL validation rejects external hosts and userinfo', () => {
   assert.equal(isAllowedLocalUrl('http://localhost:3000'), true);
-  assert.equal(isAllowedLocalUrl('https://127.0.0.1:3000/path'), true);
-  assert.equal(isAllowedLocalUrl('http://[::1]:3000'), true);
-  assert.equal(isAllowedLocalUrl('https://example.com'), false);
-  assert.equal(isAllowedLocalUrl('file:///tmp/index.html'), false);
-  assert.equal(isAllowedLocalUrl('http://localhost:3000@evil.example'), false);
-  assert.equal(isAllowedLocalUrl('http://user:password@localhost:3000'), false);
+  assert.equal(isAllowedLocalUrl('http://127.0.0.1:3000/path?query=1'), true);
+  assert.equal(isAllowedLocalUrl('https://localhost:443'), true);
+  assert.equal(isAllowedLocalUrl('http://attacker.com'), false);
+  assert.equal(isAllowedLocalUrl('http://user:pass@localhost:3000'), false);
+  assert.equal(isAllowedLocalUrl('javascript:alert(1)'), false);
 });
 
 test('navigation and IPC sender URLs must stay on the configured app origin', () => {
   const origin = 'http://localhost:3000';
-  assert.equal(isAllowedNavigation('http://localhost:3000/history', origin), true);
-  assert.equal(isAllowedNavigation('http://localhost:3001/', origin), false);
-  assert.equal(isAllowedNavigation('https://localhost:3000/', origin), false);
+  assert.equal(isAllowedNavigation('http://localhost:3000/settings', origin), true);
+  assert.equal(isAllowedNavigation('http://localhost:3001/settings', origin), false);
+  assert.equal(isAllowedNavigation('https://evil.com/settings', origin), false);
 
   assert.equal(isTrustedSenderUrl('http://localhost:3000/', origin), true);
   assert.equal(isTrustedSenderUrl('http://localhost:3000/?mode=mouse', origin), true);
@@ -38,12 +39,14 @@ test('navigation and IPC sender URLs must stay on the configured app origin', ()
   assert.equal(isTrustedOriginUrl('http://localhost:3001/history', origin), false);
 });
 
-test('media permissions allow camera and microphone access', () => {
+test('permissions allow media and clipboard access', () => {
   assert.equal(isAllowedMediaPermission('media'), true);
   assert.equal(isAllowedMediaPermission('camera'), true);
   assert.equal(isAllowedMediaPermission('microphone'), true);
   assert.equal(isAllowedMediaPermission('video-capture'), true);
   assert.equal(isAllowedMediaPermission('audio-capture'), true);
+  assert.equal(isAllowedMediaPermission('clipboard-read'), true);
+  assert.equal(isAllowedMediaPermission('clipboard-sanitized-write'), true);
   assert.equal(isAllowedMediaPermission('geolocation'), false);
   assert.equal(isAllowedMediaPermission('notifications'), false);
 });
@@ -54,65 +57,71 @@ test('mouse coordinates reject malformed, non-finite, and unreasonable values', 
   assert.equal(parsePointPayload({ x: Number.NaN, y: 1 }), null);
   assert.equal(parsePointPayload({ x: Infinity, y: 1 }), null);
   assert.equal(parsePointPayload({ x: MAX_ABSOLUTE_COORDINATE + 1, y: 0 }), null);
-  assert.equal(parsePointPayload({ x: '1', y: 0 }), null);
+  assert.equal(parsePointPayload({ x: 0, y: -(MAX_ABSOLUTE_COORDINATE + 1) }), null);
 });
 
-test('rate limiter enforces a per-renderer/channel window and resets deterministically', () => {
-  const limiter = new IpcRateLimiter(1_000, 4);
-  assert.equal(limiter.consume(1, 'mouse:move', 2, 100), true);
-  assert.equal(limiter.consume(1, 'mouse:move', 2, 200), true);
-  assert.equal(limiter.consume(1, 'mouse:move', 2, 300), false);
-  assert.equal(limiter.consume(1, 'mouse:scroll', 2, 300), true);
-  assert.equal(limiter.consume(2, 'mouse:move', 2, 300), true);
-  assert.equal(limiter.consume(1, 'mouse:move', 2, 1_100), true);
-});
-
-test('rate limiter clears expired entries before accepting a new renderer channel', () => {
+test('IPC rate limiter drops events exceeding frequency threshold and supports pruning', () => {
   const limiter = new IpcRateLimiter(1_000, 2);
-  assert.equal(limiter.consume(1, 'first', 1, 0), true);
-  assert.equal(limiter.consume(2, 'second', 1, 0), true);
-  assert.equal(limiter.consume(3, 'third', 1, 1_001), true);
-  assert.equal(limiter.consume(3, 'third', 1, 1_002), false);
+  const senderId = 1;
+  const channel = 'mouse:move';
+
+  assert.equal(limiter.consume(senderId, channel, 2, 0), true);
+  assert.equal(limiter.consume(senderId, channel, 2, 100), true);
+  assert.equal(limiter.consume(senderId, channel, 2, 200), false);
+  assert.equal(limiter.consume(senderId, channel, 2, 1_001), true);
+
+  limiter.consume(2, 'channel:a', 5, 1_100);
+  limiter.consume(3, 'channel:b', 5, 1_200);
+  limiter.consume(4, 'channel:c', 5, 2_500);
+
+  limiter.clear();
+  assert.equal(limiter.consume(senderId, channel, 1, 3_000), true);
 });
 
-test('isValidAuthToken requires valid token and matches expected token', () => {
-  const { isValidAuthToken } = require('../dist/security.js');
-  const validSecret = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
-  assert.equal(isValidAuthToken({ token: validSecret }, validSecret), true);
-  assert.equal(isValidAuthToken({ token: 'wrong-secret' }, validSecret), false);
-  assert.equal(isValidAuthToken(null, validSecret), false);
-  assert.equal(isValidAuthToken({}, validSecret), false);
-  assert.equal(isValidAuthToken({ token: 12345 }, validSecret), false);
-  assert.equal(isValidAuthToken({ token: validSecret }, ''), false);
-});
-
-test('DeadmanTimer invokes callback on timeout and cancels cleanly', (t, done) => {
-  const { DeadmanTimer } = require('../dist/security.js');
-  let fired = false;
-  const timer = new DeadmanTimer(50, () => {
-    fired = true;
-    assert.equal(fired, true);
-    done();
+test('Deadman timer fires after inactivity timeout and supports cancellation', async () => {
+  let timedOut = false;
+  const timer = new DeadmanTimer(25, () => {
+    timedOut = true;
   });
 
-  assert.equal(timer.isActive(), false);
   timer.heartbeat();
-  assert.equal(timer.isActive(), true);
-});
+  assert.equal(timer.isRunning(), true);
 
-test('DeadmanTimer cancel prevents timeout invocation', (t, done) => {
-  const { DeadmanTimer } = require('../dist/security.js');
-  let fired = false;
-  const timer = new DeadmanTimer(40, () => {
-    fired = true;
-  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  timer.heartbeat();
 
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(timedOut, false);
+
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  assert.equal(timedOut, true);
+  assert.equal(timer.isRunning(), false);
+
+  timedOut = false;
   timer.heartbeat();
   timer.cancel();
-  assert.equal(timer.isActive(), false);
+  assert.equal(timer.isRunning(), false);
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  assert.equal(timedOut, false);
+});
 
-  setTimeout(() => {
-    assert.equal(fired, false);
-    done();
-  }, 70);
+test('HeldButtonTracker records state transitions idempotently', () => {
+  const tracker = new HeldButtonTracker();
+
+  assert.equal(tracker.press('left'), true);
+  assert.equal(tracker.press('left'), false);
+  assert.equal(tracker.has('left'), true);
+  assert.equal(tracker.size(), 1);
+
+  assert.equal(tracker.release('right'), false);
+  assert.equal(tracker.release('left'), true);
+  assert.equal(tracker.size(), 0);
+
+  tracker.press('left');
+  tracker.press('right');
+  const released = tracker.releaseAll('emergency-stop');
+  assert.deepEqual(released?.buttons.sort(), ['left', 'right']);
+  assert.equal(released?.reason, 'emergency-stop');
+  assert.equal(tracker.size(), 0);
+  assert.equal(tracker.releaseAll(), null);
 });

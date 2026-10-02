@@ -14,6 +14,7 @@ import * as path from 'path';
 import {
   DEADMAN_TIMEOUT_MS,
   DeadmanTimer,
+  HeldButtonTracker,
   IpcRateLimiter,
   isAllowedLocalUrl,
   isAllowedMediaPermission,
@@ -27,7 +28,6 @@ import {
   isZoomDirection,
   parsePointPayload,
   type MouseToggleButton,
-  HeldButtonTracker,
 } from './security';
 
 interface RobotModule {
@@ -53,43 +53,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function logDiagnostic(event: string, details: Record<string, unknown> = {}): void {
-  console.info(`[gesturebridge-desktop] ${event}`, details);
-}
-
-function isRobotModule(value: unknown): value is RobotModule {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.moveMouse === 'function' &&
-    typeof value.mouseClick === 'function' &&
-    typeof value.mouseToggle === 'function' &&
-    typeof value.scrollMouse === 'function' &&
-    typeof value.keyToggle === 'function' &&
-    typeof value.getScreenSize === 'function'
-  );
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  if (!isDev) return;
+  console.log(`[gesturebridge-desktop] ${event}`, details);
 }
 
 function getRobot(): RobotModule | null {
   if (robotModule !== undefined) return robotModule;
-
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const loaded: unknown = require('robotjs');
-    robotModule = isRobotModule(loaded) ? loaded : null;
-    if (!robotModule) {
-      console.error('robotjs loaded but did not expose the expected API.');
-    }
+    robotModule = require('robotjs') as RobotModule;
+    return robotModule;
   } catch (err) {
     robotModule = null;
-    console.error('robotjs is unavailable. Run npm run rebuild in desktop/.', err);
+    console.warn('Native robotjs module is unavailable. Desktop control is disabled.', err);
+    return null;
   }
-
-  return robotModule;
 }
 
 function getWebUrl(): string {
+  const configuredUrl = process.env.WEB_URL;
   const fallbackUrl = 'http://localhost:3000';
-  const configuredUrl = process.env.WEB_URL ?? fallbackUrl;
 
+  if (!configuredUrl) return fallbackUrl;
   if (isAllowedLocalUrl(configuredUrl)) return configuredUrl;
 
   console.warn(`Blocked non-local WEB_URL "${configuredUrl}". Falling back to ${fallbackUrl}.`);
@@ -101,15 +87,29 @@ function isTrustedIpcSender(
   payload: unknown
 ): boolean {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame?.parent) {
+    logDiagnostic('ipc-rejected-window', {
+      hasMainWindow: Boolean(mainWindow),
+      sameSender: mainWindow ? event.sender === mainWindow.webContents : false,
+      hasParent: Boolean(event.senderFrame?.parent),
+    });
     return false;
   }
 
   const senderUrl = event.senderFrame?.url ?? event.sender.getURL();
   if (!isTrustedOriginUrl(senderUrl, trustedOrigin)) {
+    logDiagnostic('ipc-rejected-origin', { senderUrl, trustedOrigin });
     return false;
   }
 
-  return isValidAuthToken(payload, sessionAuthToken);
+  const validToken = isValidAuthToken(payload, sessionAuthToken);
+  if (!validToken) {
+    logDiagnostic('ipc-rejected-token', {
+      hasToken: isRecord(payload) && typeof payload.token === 'string',
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function consumeIpcRateLimit(
@@ -215,25 +215,19 @@ function releaseHeldMouseButtons(reason: string = 'manual'): void {
   if (!result) return;
 
   const robot = getRobot();
-  if (robot) {
-    for (const button of result.buttons) {
-      try {
-        robot.mouseToggle('up', button);
-      } catch (err) {
-        console.error(`Error releasing held ${button} mouse button:`, err);
-      }
+  for (const button of result.buttons) {
+    try {
+      robot?.mouseToggle('up', button);
+    } catch (err) {
+      console.error(`Error releasing mouse button ${button}:`, err);
     }
   }
-  deadmanTimer.cancel();
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
-      mainWindow.webContents.send('mouse:drag-released', {
-        buttons: result.buttons,
-        reason: result.reason,
-      });
+      mainWindow.webContents.send('mouse:drag-released', result);
     } catch (err) {
-      console.error('Failed to notify renderer of button release:', err);
+      console.error('Error notifying renderer of drag release:', err);
     }
   }
 }
@@ -323,21 +317,19 @@ function createWindow(webUrl: string, allowedOrigin: string): void {
     console.error('Unable to start GestureBridge web app.', error);
   });
 
-  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
-    if (!isAllowedNavigation(targetUrl, allowedOrigin)) {
-      event.preventDefault();
-      console.warn(`Blocked navigation to ${targetUrl}`);
-    }
-  });
-
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isAllowedNavigation(url, allowedOrigin)) {
-      console.warn(`Blocked new window to ${url}`);
+    if (isAllowedNavigation(url, allowedOrigin)) {
+      return { action: 'allow' };
     }
+    logDiagnostic('blocked-window-open', { url });
     return { action: 'deny' };
   });
 
-  mainWindow.webContents.on('will-attach-webview', (event) => {
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedNavigation(url, allowedOrigin)) {
+      return;
+    }
+    logDiagnostic('blocked-navigation', { url });
     event.preventDefault();
   });
 
@@ -406,14 +398,14 @@ if (!gotTheLock) {
 
   app.on('before-quit', () => {
     deadmanTimer.cancel();
-    releaseHeldMouseButtons();
+    releaseHeldMouseButtons('app-before-quit');
     globalShortcut.unregisterAll();
   });
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     deadmanTimer.cancel();
-    releaseHeldMouseButtons();
+    releaseHeldMouseButtons('app-will-quit');
   });
 
   app.on('activate', () => {
@@ -492,9 +484,9 @@ ipcMain.on('mouse:scroll', (event, payload: unknown) => {
   if (!robot) return;
 
   try {
-    robot.scrollMouse(0, payload.direction === 'up' ? 3 : -3);
+    robot.scrollMouse(0, payload.direction === 'up' ? -5 : 5);
   } catch (err) {
-    console.error('Error scrolling mouse:', err);
+    console.error('Error scrolling:', err);
   }
 });
 
@@ -555,8 +547,11 @@ ipcMain.on('zoom', (event, payload: unknown) => {
 });
 
 ipcMain.handle('screen:size', (event, payload: unknown) => {
-  if (!isTrustedIpcSender(event, payload) || !consumeIpcRateLimit(event, 'screen:size', 30)) {
+  if (!isTrustedIpcSender(event, payload)) {
     throw new Error('Unauthorized IPC sender');
+  }
+  if (!consumeIpcRateLimit(event, 'screen:size', 60)) {
+    throw new Error('Rate limit exceeded for channel: screen:size');
   }
 
   const robot = getRobot();
@@ -589,15 +584,13 @@ ipcMain.on('window:set-compact', (event, payload: unknown) => {
       if (!normalBounds) {
         normalBounds = mainWindow.getBounds();
       }
-      const currentBounds = mainWindow.getBounds();
-      const display = screen.getDisplayMatching(currentBounds);
-      const { workArea } = display;
-      const width = 220;
-      const height = 220;
-      const x = Math.round(workArea.x + (workArea.width - width) / 2);
-      const y = Math.round(workArea.y + 40);
+      const { workArea } = screen.getPrimaryDisplay();
+      const width = 360;
+      const height = 240;
+      const x = workArea.x + workArea.width - width - 20;
+      const y = workArea.y + workArea.height - height - 20;
 
-      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      mainWindow.setAlwaysOnTop(true, 'floating');
       mainWindow.setBounds({ x, y, width, height });
       mainWindow.setResizable(false);
     } else {
