@@ -35,7 +35,7 @@ describe('benchmark evaluation dataset', () => {
   });
 
   it('manifest files in public/ml match the reproducible schema', () => {
-    const manifestPath = path.join(process.cwd(), 'public', 'ml', 'model', 'manifest.json');
+    const manifestPath = path.join(process.cwd(), 'public', 'ml', 'models', 'v1.0.0', 'manifest.json');
     expect(fs.existsSync(manifestPath)).toBe(true);
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));

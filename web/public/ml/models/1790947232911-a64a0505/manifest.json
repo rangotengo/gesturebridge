@@ -1,10 +1,10 @@
 {
-  "version": "1790947668144-6a0ecc66",
-  "createdAt": "2026-10-02T13:27:48.242Z",
+  "version": "1790947232911-a64a0505",
+  "createdAt": "2026-10-02T13:20:33.016Z",
   "featureCount": 63,
   "normalizationVersion": "wrist-maxabs-v1",
-  "samplesCount": 1479,
-  "datasetRevision": "da287a1145af58d16914d5b73d396bb845c0473687adb8ce0457d696aa129fdc",
+  "samplesCount": 1043,
+  "datasetRevision": "e296a2c91869ccc8c40e98ac4d899387fdaed5ab33918c189a7f672cc1979a2b",
   "denseLabelMap": [
     {
       "labelIndex": 0,
@@ -29,10 +29,6 @@
     {
       "labelIndex": 5,
       "name": "Thumb"
-    },
-    {
-      "labelIndex": 6,
-      "name": "Circle"
     }
   ],
   "labels": [
@@ -59,42 +55,38 @@
     {
       "labelIndex": 5,
       "name": "Thumb"
-    },
-    {
-      "labelIndex": 6,
-      "name": "Circle"
     }
   ],
   "metrics": {
-    "trainingAccuracy": 0.9536256194114685,
-    "validationAccuracy": 0.9590443968772888,
-    "macroF1": 0.9501,
-    "macroPrecision": 0.956,
-    "macroRecall": 0.9471,
-    "weightedF1": 0.9586,
+    "trainingAccuracy": 0.9808840751647949,
+    "validationAccuracy": 0.9708737730979919,
+    "macroF1": 0.9582,
+    "macroPrecision": 0.9625,
+    "macroRecall": 0.9579,
+    "weightedF1": 0.9705,
     "perGestureMetrics": [
       {
         "labelIndex": 0,
         "name": "Pointing",
-        "precision": 0.9211,
-        "recall": 0.9859,
-        "f1Score": 0.9524,
-        "support": 71
+        "precision": 0.9,
+        "recall": 1,
+        "f1Score": 0.9474,
+        "support": 27
       },
       {
         "labelIndex": 1,
         "name": "Fist",
-        "precision": 0.9706,
-        "recall": 0.9429,
-        "f1Score": 0.9565,
-        "support": 105
+        "precision": 0.9859,
+        "recall": 1,
+        "f1Score": 0.9929,
+        "support": 70
       },
       {
         "labelIndex": 2,
         "name": "Peace",
-        "precision": 0.9808,
-        "recall": 1,
-        "f1Score": 0.9903,
+        "precision": 1,
+        "recall": 0.9804,
+        "f1Score": 0.9901,
         "support": 51
       },
       {
@@ -116,24 +108,15 @@
       {
         "labelIndex": 5,
         "name": "Thumb",
-        "precision": 0.9444,
-        "recall": 1,
-        "f1Score": 0.9714,
+        "precision": 0.8889,
+        "recall": 0.9412,
+        "f1Score": 0.9143,
         "support": 17
-      },
-      {
-        "labelIndex": 6,
-        "name": "Circle",
-        "precision": 0.875,
-        "recall": 0.875,
-        "f1Score": 0.875,
-        "support": 8
       }
     ],
     "confusionMatrix": [
       [
-        70,
-        1,
+        27,
         0,
         0,
         0,
@@ -141,19 +124,17 @@
         0
       ],
       [
-        3,
-        99,
-        1,
+        0,
+        70,
         0,
         0,
-        1,
-        1
+        0,
+        0
       ],
       [
+        1,
         0,
-        0,
-        51,
-        0,
+        50,
         0,
         0,
         0
@@ -164,26 +145,15 @@
         0,
         18,
         0,
-        0,
         0
       ],
       [
-        3,
-        1,
+        2,
+        0,
         0,
         0,
         19,
-        0,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        17,
-        0
+        2
       ],
       [
         0,
@@ -191,14 +161,13 @@
         0,
         0,
         0,
-        0,
-        7
+        16
       ]
     ],
     "splitStrategy": "stratified-random"
   },
   "weightsSha256": {
-    "weights.bin": "7baab89b9d9c1bc06b200cb5b64c40af8bda1fcfb0687e1f8bb70a733d9ffc07"
+    "weights.bin": "69baba8547362de1a414c505d3ffb152976d74fb20654ee8aec7e33d93bfb28a"
   },
-  "modelJsonSha256": "f1e4dd247b60834a1008d63a5bebbc0280e6c4ff74d0ff7eb41ac86846f16ab5"
+  "modelJsonSha256": "04524e80489adf8e004073fc479566feade3bfee608f833b88bfe05d13aded58"
 }

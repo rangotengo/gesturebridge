@@ -1,10 +1,10 @@
 {
-  "version": "1790947668144-6a0ecc66",
-  "createdAt": "2026-10-02T13:27:48.242Z",
+  "version": "1790947364295-ef8fb3d9",
+  "createdAt": "2026-10-02T13:22:44.394Z",
   "featureCount": 63,
   "normalizationVersion": "wrist-maxabs-v1",
-  "samplesCount": 1479,
-  "datasetRevision": "da287a1145af58d16914d5b73d396bb845c0473687adb8ce0457d696aa129fdc",
+  "samplesCount": 1084,
+  "datasetRevision": "bc310ea281fe6b0f37a3ba811ac1fc6f64e52f32592ff2c721fe7d5831b47bd0",
   "denseLabelMap": [
     {
       "labelIndex": 0,
@@ -66,35 +66,35 @@
     }
   ],
   "metrics": {
-    "trainingAccuracy": 0.9536256194114685,
-    "validationAccuracy": 0.9590443968772888,
-    "macroF1": 0.9501,
-    "macroPrecision": 0.956,
-    "macroRecall": 0.9471,
-    "weightedF1": 0.9586,
+    "trainingAccuracy": 0.9689655303955078,
+    "validationAccuracy": 0.9766355156898499,
+    "macroF1": 0.9671,
+    "macroPrecision": 0.9731,
+    "macroRecall": 0.9641,
+    "weightedF1": 0.9766,
     "perGestureMetrics": [
       {
         "labelIndex": 0,
         "name": "Pointing",
-        "precision": 0.9211,
-        "recall": 0.9859,
-        "f1Score": 0.9524,
-        "support": 71
+        "precision": 0.931,
+        "recall": 1,
+        "f1Score": 0.9643,
+        "support": 27
       },
       {
         "labelIndex": 1,
         "name": "Fist",
-        "precision": 0.9706,
-        "recall": 0.9429,
-        "f1Score": 0.9565,
-        "support": 105
+        "precision": 0.9859,
+        "recall": 1,
+        "f1Score": 0.9929,
+        "support": 70
       },
       {
         "labelIndex": 2,
         "name": "Peace",
-        "precision": 0.9808,
-        "recall": 1,
-        "f1Score": 0.9903,
+        "precision": 1,
+        "recall": 0.9608,
+        "f1Score": 0.98,
         "support": 51
       },
       {
@@ -109,31 +109,31 @@
         "labelIndex": 4,
         "name": "Rock",
         "precision": 1,
-        "recall": 0.8261,
-        "f1Score": 0.9048,
+        "recall": 0.913,
+        "f1Score": 0.9545,
         "support": 23
       },
       {
         "labelIndex": 5,
         "name": "Thumb",
-        "precision": 0.9444,
+        "precision": 0.8947,
         "recall": 1,
-        "f1Score": 0.9714,
+        "f1Score": 0.9444,
         "support": 17
       },
       {
         "labelIndex": 6,
         "name": "Circle",
-        "precision": 0.875,
+        "precision": 1,
         "recall": 0.875,
-        "f1Score": 0.875,
+        "f1Score": 0.9333,
         "support": 8
       }
     ],
     "confusionMatrix": [
       [
-        70,
-        1,
+        27,
+        0,
         0,
         0,
         0,
@@ -141,18 +141,18 @@
         0
       ],
       [
-        3,
-        99,
-        1,
+        0,
+        70,
         0,
         0,
-        1,
-        1
+        0,
+        0,
+        0
       ],
       [
+        2,
         0,
-        0,
-        51,
+        49,
         0,
         0,
         0,
@@ -168,12 +168,12 @@
         0
       ],
       [
-        3,
-        1,
         0,
         0,
-        19,
         0,
+        0,
+        21,
+        2,
         0
       ],
       [
@@ -198,7 +198,7 @@
     "splitStrategy": "stratified-random"
   },
   "weightsSha256": {
-    "weights.bin": "7baab89b9d9c1bc06b200cb5b64c40af8bda1fcfb0687e1f8bb70a733d9ffc07"
+    "weights.bin": "f4ee341f92553267bbfb88df01c859b6e09b9abf1e943cc676bfbd63a4d5b63a"
   },
-  "modelJsonSha256": "f1e4dd247b60834a1008d63a5bebbc0280e6c4ff74d0ff7eb41ac86846f16ab5"
+  "modelJsonSha256": "e36de94daf9c3eb2b9641c97f0be444c530d78c315bf17a3cd1ebed3c8a61431"
 }
