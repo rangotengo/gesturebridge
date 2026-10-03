@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,3 +30,61 @@ jobs:
       - run: npm run test
       - run: npm run build:web
       - run: npm --prefix web audit --omit=dev --audit-level=critical
+
+  build-desktop:
+    name: Build desktop (${{ matrix.platform }}-${{ matrix.arch }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win
+            arch: x64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          - os: macos-15
+            platform: mac
+            arch: arm64
+    env:
+      # CI produces test installers without requiring signing credentials.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.11'
+      - name: Configure Python for native modules
+        shell: bash
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "npm_config_python=$PYTHON_PATH" >> "$GITHUB_ENV"
+      - name: Install desktop dependencies and rebuild RobotJS for Electron
+        run: npm ci
+      - name: Test desktop
+        run: npm test
+      - name: Package desktop installers
+        run: npm run build -- --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+      - name: Upload desktop installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestureBridge-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.blockmap
+          if-no-files-found: error
+          retention-days: 14
