@@ -43,12 +43,15 @@ jobs:
           - os: windows-2022
             platform: win
             arch: x64
+            executable: release/win-unpacked/GestureBridge.exe
           - os: macos-15-intel
             platform: mac
             arch: x64
+            executable: release/mac/GestureBridge.app/Contents/MacOS/GestureBridge
           - os: macos-15
             platform: mac
             arch: arm64
+            executable: release/mac-arm64/GestureBridge.app/Contents/MacOS/GestureBridge
     env:
       # CI produces test installers without requiring signing credentials.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -76,7 +79,9 @@ jobs:
       - name: Test desktop
         run: npm test
       - name: Package desktop installers
-        run: npm run build -- --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+        run: npm run build -- --config electron-builder.ci.yml --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+      - name: Verify packaged executable and RobotJS load
+        run: node scripts/verify-packaged.cjs "${{ matrix.executable }}"
       - name: Upload desktop installers
         uses: actions/upload-artifact@v4
         with:

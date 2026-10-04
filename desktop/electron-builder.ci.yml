@@ -1,0 +1,7 @@
+# Credential-free CI installers use ad-hoc signing. Hardened Runtime's
+# library validation rejects Electron frameworks without a matching Team ID.
+extends: ./electron-builder.yml
+mac:
+  identity: '-'
+  hardenedRuntime: false
+  notarize: false
